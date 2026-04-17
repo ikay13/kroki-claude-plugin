@@ -1,0 +1,12 @@
+\documentclass{standalone}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\begin{document}
+\begin{tikzpicture}[node distance=2cm]
+  \node[draw, rectangle] (a) {Input};
+  \node[draw, rectangle, right of=a] (b) {Process};
+  \node[draw, rectangle, right of=b] (c) {Output};
+  \draw[->] (a) -- (b);
+  \draw[->] (b) -- (c);
+\end{tikzpicture}
+\end{document}

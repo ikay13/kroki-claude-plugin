@@ -1,0 +1,18 @@
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity counter is
+  generic (
+    WIDTH : positive := 8
+  );
+  port (
+    clk    : in  std_logic;
+    rst_n  : in  std_logic;
+    enable : in  std_logic;
+    count  : out std_logic_vector(WIDTH-1 downto 0)
+  );
+end entity counter;
+
+architecture rtl of counter is
+begin
+end architecture rtl;

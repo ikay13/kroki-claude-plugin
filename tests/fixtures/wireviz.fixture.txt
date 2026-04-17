@@ -1,0 +1,18 @@
+connectors:
+  X1:
+    type: D-Sub
+    pinlabels: [DCD, RX, TX]
+  X2:
+    type: D-Sub
+    pinlabels: [DCD, RX, TX]
+
+cables:
+  W1:
+    wirecount: 3
+    colors: [RD, GN, BU]
+
+connections:
+  -
+    - X1: [1, 2, 3]
+    - W1: [1, 2, 3]
+    - X2: [1, 2, 3]

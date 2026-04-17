@@ -1,0 +1,5 @@
+(draw-column-headers)
+(draw-box "Type"   {:span 2})
+(draw-box "Length" {:span 2})
+(draw-box "Value"  {:span 4})
+(draw-bottom)
