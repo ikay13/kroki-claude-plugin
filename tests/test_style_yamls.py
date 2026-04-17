@@ -40,3 +40,13 @@ def test_abbreviations_yaml_loads_and_has_entries():
     assert "API" in data["abbreviations"]
     for exp in data["abbreviations"].values():
         assert isinstance(exp, str) and len(exp) > 0
+
+
+def test_legend_template_yaml_loads_with_placements_and_sections():
+    data = load("legend-template.yml")
+    assert "placements" in data
+    assert "sections" in data
+    assert "top-right" in data["placements"]
+    assert {"color_key", "symbol_key", "abbreviations", "footer"} <= set(
+        data["sections"].keys()
+    )

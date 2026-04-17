@@ -1,0 +1,43 @@
+# Legend layout template. Used by render-with-legend.sh.
+
+placements:
+  top-right:    {anchor: top-right,   offset: [10, 10]}
+  top-left:     {anchor: top-left,    offset: [10, 10]}
+  bottom-right: {anchor: bottom-right, offset: [10, 10]}
+  bottom-left:  {anchor: bottom-left,  offset: [10, 10]}
+  below:        {anchor: below,       offset: [0, 16]}
+  beside-right: {anchor: beside-right, offset: [16, 0]}
+  beside-left:  {anchor: beside-left,  offset: [16, 0]}
+  embedded:     {anchor: embedded,    offset: [0, 0]}
+  overlay:      {anchor: overlay,     offset: [0, 0], opacity: 0.85}
+  none:         {anchor: none}
+
+default_placement: top-right
+
+sections:
+  color_key:
+    enabled: true
+    title: "Colors"
+    filter: auto          # include only palette entries present in diagram
+    row_height: 24
+    swatch_size: 16
+  symbol_key:
+    enabled: true
+    title: "Symbols"
+    filter: auto
+    row_height: 24
+    glyph_size: 18
+  abbreviations:
+    enabled: true
+    title: "Abbreviations"
+    filter: auto          # include only abbrevs appearing in diagram body
+    row_height: 20
+  footer:
+    enabled: false
+    content: "{date} — {commit}"
+    font_size: 10
+
+sizing_modes:
+  screen: {font_size: 14, stroke_width: 1.5}
+  print:  {font_size: 10, stroke_width: 2.0}
+  poster: {font_size: 24, stroke_width: 3.0}
