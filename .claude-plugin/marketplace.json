@@ -1,0 +1,18 @@
+{
+  "name": "kroki-local",
+  "owner": {
+    "name": "orin"
+  },
+  "metadata": {
+    "description": "Local personal marketplace for the kroki diagram plugin."
+  },
+  "plugins": [
+    {
+      "name": "kroki",
+      "source": "./",
+      "description": "Diagram generation and rendering via self-hosted Kroki server. Supports 29 diagram languages including PlantUML, Mermaid, Graphviz, D2, C4, and more.",
+      "version": "0.1.0",
+      "category": "productivity"
+    }
+  ]
+}
