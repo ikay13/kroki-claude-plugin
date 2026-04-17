@@ -74,3 +74,92 @@ class TestEnsureSymlink:
     def test_usage_error_on_missing_args(self, tmp_path: Path) -> None:
         result = run_script("ensure-symlink.sh")
         assert result.returncode == 3
+
+
+class TestUpdateIndex:
+    def test_writes_index_with_single_entry(self, tmp_path: Path) -> None:
+        diagrams = tmp_path / "diagrams"
+        diagrams.mkdir()
+        (diagrams / "arch-demo-foo.puml").write_text(
+            "' Test architecture diagram\n@startuml\nA -> B\n@enduml\n"
+        )
+        (diagrams / "arch-demo-foo.light.svg").write_text("<svg></svg>")
+        (diagrams / "arch-demo-foo.dark.svg").write_text("<svg></svg>")
+
+        result = run_script("update-index.sh", str(diagrams))
+
+        assert result.returncode == 0, result.stderr
+        index = diagrams / "INDEX.md"
+        assert index.exists()
+        content = index.read_text()
+        assert "# Diagram Index" in content
+        assert "## arch" in content
+        assert "arch-demo-foo" in content
+        assert "Test architecture diagram" in content
+        assert "arch-demo-foo.puml" in content
+
+    def test_groups_by_prefix(self, tmp_path: Path) -> None:
+        diagrams = tmp_path / "diagrams"
+        diagrams.mkdir()
+        for basename, comment_prefix, ext in [
+            ("arch-demo-one", "'", "puml"),
+            ("arch-demo-two", "'", "puml"),
+            ("seq-demo-three", "%%", "mmd"),
+        ]:
+            (diagrams / f"{basename}.{ext}").write_text(
+                f"{comment_prefix} {basename} purpose\n"
+            )
+            (diagrams / f"{basename}.light.svg").write_text("<svg></svg>")
+            (diagrams / f"{basename}.dark.svg").write_text("<svg></svg>")
+
+        result = run_script("update-index.sh", str(diagrams))
+        assert result.returncode == 0
+
+        content = (diagrams / "INDEX.md").read_text()
+        assert "## arch" in content
+        assert "## seq" in content
+        # arch group appears before seq group (alphabetical)
+        assert content.index("## arch") < content.index("## seq")
+
+    def test_handles_missing_source_file(self, tmp_path: Path) -> None:
+        diagrams = tmp_path / "diagrams"
+        diagrams.mkdir()
+        (diagrams / "arch-orphan.light.svg").write_text("<svg></svg>")
+        (diagrams / "arch-orphan.dark.svg").write_text("<svg></svg>")
+
+        result = run_script("update-index.sh", str(diagrams))
+        assert result.returncode == 0
+
+        content = (diagrams / "INDEX.md").read_text()
+        assert "arch-orphan" in content
+        assert "(none)" in content
+
+    def test_handles_empty_dir(self, tmp_path: Path) -> None:
+        diagrams = tmp_path / "diagrams"
+        diagrams.mkdir()
+
+        result = run_script("update-index.sh", str(diagrams))
+        assert result.returncode == 0
+
+        index = diagrams / "INDEX.md"
+        assert index.exists()
+        assert "No diagrams found" in index.read_text()
+
+    def test_error_on_missing_dir(self, tmp_path: Path) -> None:
+        result = run_script("update-index.sh", str(tmp_path / "does-not-exist"))
+        assert result.returncode != 0
+
+    def test_detects_mermaid_percent_comment(self, tmp_path: Path) -> None:
+        diagrams = tmp_path / "diagrams"
+        diagrams.mkdir()
+        (diagrams / "seq-flow-demo.mmd").write_text(
+            "%% Mermaid flow purpose line\nsequenceDiagram\nA->>B: hi\n"
+        )
+        (diagrams / "seq-flow-demo.light.svg").write_text("<svg></svg>")
+        (diagrams / "seq-flow-demo.dark.svg").write_text("<svg></svg>")
+
+        result = run_script("update-index.sh", str(diagrams))
+        assert result.returncode == 0
+
+        content = (diagrams / "INDEX.md").read_text()
+        assert "Mermaid flow purpose line" in content
