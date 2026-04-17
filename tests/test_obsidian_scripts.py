@@ -163,3 +163,92 @@ class TestUpdateIndex:
 
         content = (diagrams / "INDEX.md").read_text()
         assert "Mermaid flow purpose line" in content
+
+
+class TestEmbedInMd:
+    def test_appends_section_and_block_when_section_absent(self, tmp_path: Path) -> None:
+        target = tmp_path / "note.md"
+        target.write_text("# Hello\n\nBody text.\n")
+
+        result = run_script(
+            "embed-in-md.sh",
+            str(target),
+            "arch-demo",
+            "--caption",
+            "Test caption",
+        )
+
+        assert result.returncode == 0, result.stderr
+        content = target.read_text()
+        assert "## Diagrams" in content
+        assert '<div class="kroki-dual">' in content
+        assert "[[arch-demo.light.svg]]" in content
+        assert "[[arch-demo.dark.svg]]" in content
+        assert "</div>" in content
+        assert "*Figure -- Test caption*" in content
+
+    def test_omits_caption_when_not_provided(self, tmp_path: Path) -> None:
+        target = tmp_path / "note.md"
+        target.write_text("# Hello\n")
+
+        result = run_script("embed-in-md.sh", str(target), "arch-demo")
+
+        assert result.returncode == 0, result.stderr
+        content = target.read_text()
+        assert "[[arch-demo.light.svg]]" in content
+        assert "Figure --" not in content
+
+    def test_idempotent_on_repeat_call(self, tmp_path: Path) -> None:
+        target = tmp_path / "note.md"
+        target.write_text("# Hello\n")
+
+        run_script("embed-in-md.sh", str(target), "arch-demo")
+        run_script("embed-in-md.sh", str(target), "arch-demo")
+
+        content = target.read_text()
+        assert content.count("[[arch-demo.light.svg]]") == 1
+
+    def test_inserts_under_existing_section(self, tmp_path: Path) -> None:
+        target = tmp_path / "note.md"
+        target.write_text(
+            "# Session Log\n\n"
+            "## Insights\n\nFoo.\n\n"
+            "## Diagrams\n\n"
+            "## Next Steps\n\nDo X.\n"
+        )
+
+        result = run_script("embed-in-md.sh", str(target), "arch-demo")
+        assert result.returncode == 0
+
+        content = target.read_text()
+        i_diag = content.index("## Diagrams")
+        i_next = content.index("## Next Steps")
+        assert i_diag < content.index("[[arch-demo.light.svg]]") < i_next
+
+    def test_respects_custom_section(self, tmp_path: Path) -> None:
+        target = tmp_path / "note.md"
+        target.write_text("# Hello\n\n## Architecture\n\nProse.\n")
+
+        result = run_script(
+            "embed-in-md.sh",
+            str(target),
+            "arch-demo",
+            "--section",
+            "## Architecture",
+        )
+        assert result.returncode == 0
+
+        content = target.read_text()
+        i_arch = content.index("## Architecture")
+        i_link = content.index("[[arch-demo.light.svg]]")
+        assert i_arch < i_link
+
+    def test_usage_error_on_missing_args(self, tmp_path: Path) -> None:
+        result = run_script("embed-in-md.sh")
+        assert result.returncode == 3
+
+    def test_error_when_target_missing(self, tmp_path: Path) -> None:
+        result = run_script(
+            "embed-in-md.sh", str(tmp_path / "nope.md"), "arch-demo"
+        )
+        assert result.returncode == 3
