@@ -60,7 +60,30 @@ def atomic_write(path: Path, content: str | bytes, *, encoding: str = "utf-8") -
 
 
 def bounding_box(svg: str) -> tuple[float, float]:
-    raise NotImplementedError
+    """Return (width, height) in user units. Prefers viewBox, falls back to width/height.
+
+    Strips unit suffixes (pt, px, mm) from width/height attributes. Raises ValueError
+    if neither viewBox nor width+height is present. Tolerates `<?xml?>` and
+    `<!DOCTYPE>` preambles emitted by Kroki.
+    """
+    root = ET.fromstring(_strip_preamble(svg))
+    viewbox = root.get("viewBox")
+    if viewbox:
+        parts = viewbox.replace(",", " ").split()
+        if len(parts) == 4:
+            return float(parts[2]), float(parts[3])
+
+    def _strip(v: str | None) -> float | None:
+        if v is None:
+            return None
+        m = re.match(r"^\s*([\d.]+)", v)
+        return float(m.group(1)) if m else None
+
+    w = _strip(root.get("width"))
+    h = _strip(root.get("height"))
+    if w is None or h is None:
+        raise ValueError("SVG has no viewBox and no width/height")
+    return w, h
 
 
 def flatten_css_vars(svg: str) -> str:

@@ -35,3 +35,19 @@ def test_atomic_write_cleans_tempfile_on_error(tmp_path: Path, monkeypatch) -> N
         atomic_write(target, "<svg/>")
     assert not target.exists()
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_bounding_box_from_viewbox_with_kroki_preamble() -> None:
+    # Real-world Kroki/PlantUML output shape: XML decl + external-DTD DOCTYPE.
+    svg = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
+        '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" '
+        '"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n'
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300"/>'
+    )
+    assert bounding_box(svg) == (400.0, 300.0)
+
+
+def test_bounding_box_from_width_height() -> None:
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200pt" height="150pt"/>'
+    assert bounding_box(svg) == (200.0, 150.0)
