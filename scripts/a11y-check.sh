@@ -39,6 +39,7 @@ REPORT="$REPORT_DIR/${BASE}.log"
 mkdir -p "$REPORT_DIR"
 
 export KROKI_REPO_ROOT="$REPO_ROOT"
+set +e
 python3 - "$SVG" "$REPORT" <<'PYEOF'
 import os
 import sys
@@ -90,5 +91,12 @@ if collisions:
 if contrast_warnings:
     print(f"a11y: low contrast in {svg_path.name}: {contrast_warnings}", file=sys.stderr)
 PYEOF
+py_rc=$?
+set -e
+# Python failure does NOT break advisory — warnings already on stderr.
+# Log a hint if python crashed; always exit 0.
+if (( py_rc != 0 )); then
+    echo "a11y: internal error ($py_rc) — report may be incomplete for $(basename "$SVG")" >&2
+fi
 
 exit 0

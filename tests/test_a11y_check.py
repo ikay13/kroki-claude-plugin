@@ -52,3 +52,15 @@ def test_usage_no_args():
     r = run()
     assert r.returncode != 0
     assert "usage" in (r.stdout + r.stderr).lower()
+
+
+def test_exits_zero_even_if_python_fails(tmp_path, monkeypatch):
+    """Advisory contract: python heredoc failure must not break exit 0."""
+    state = tmp_path / "state"
+    monkeypatch.setenv("KROKI_STATE_DIR", str(state))
+    svg = tmp_path / "bad.svg"
+    # Write invalid UTF-8 bytes — Path.read_text() will raise UnicodeDecodeError.
+    svg.write_bytes(b"\xff\xfe\xfd invalid utf-8 \xc0\xc1")
+    r = run(str(svg))
+    # Advisory contract: exit 0 even when the Python layer fails.
+    assert r.returncode == 0
