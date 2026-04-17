@@ -67,3 +67,38 @@ def test_flatten_css_vars_replaces_with_hex_fallback() -> None:
     assert "#F7F7F7" in out
     assert "#0072B2" in out
     assert "#808080" in out
+
+
+def test_dark_remap_swaps_palette() -> None:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<rect fill="#F7F7F7"/>'  # background -> dark bg
+        '<text fill="#1F1F1F">hi</text>'  # emphasis text -> light text
+        '<line stroke="#CCCCCC"/>'  # subtle stroke
+        '<tspan fill="#808080"/></svg>'  # muted
+    )
+    out = dark_remap(svg)
+    assert "#2B2B2B" in out
+    assert "#E6E6E6" in out
+    assert "#444444" in out
+    assert "#A0A0A0" in out
+    # Originals must be gone (case-insensitive check).
+    low = out.lower()
+    assert "#f7f7f7" not in low
+    assert "#1f1f1f" not in low
+    assert "#cccccc" not in low
+
+
+def test_dark_remap_preserves_okabe_ito_accents() -> None:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<rect fill="#E69F00"/>'
+        '<rect fill="#56B4E9"/>'
+        '<rect fill="#009E73"/>'
+        '<rect fill="#0072B2"/>'
+        '<rect fill="#D55E00"/>'
+        '<rect fill="#CC79A7"/></svg>'
+    )
+    out = dark_remap(svg)
+    for accent in ("#E69F00", "#56B4E9", "#009E73", "#0072B2", "#D55E00", "#CC79A7"):
+        assert accent in out

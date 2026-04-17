@@ -101,8 +101,23 @@ def flatten_css_vars(svg: str) -> str:
     return _CSS_VAR_RE.sub(lambda m: m.group(1), svg)
 
 
+_HEX6_RE = re.compile(r"#([0-9A-Fa-f]{6})")
+
+
 def dark_remap(svg: str) -> str:
-    raise NotImplementedError
+    """Swap light-palette hex codes for dark-palette hex codes.
+
+    Operates on the raw SVG string — catches fill/stroke attributes,
+    inline `style=`, and CSS rule bodies uniformly. Case-insensitive match
+    against DARK_REMAP keys. Hex codes not in the table (including
+    Okabe-Ito accents) are left untouched.
+    """
+
+    def _sub(match: re.Match[str]) -> str:
+        key = ("#" + match.group(1)).lower()
+        return DARK_REMAP.get(key, match.group(0))
+
+    return _HEX6_RE.sub(_sub, svg)
 
 
 def stitch_svgs_vertical(svgs: Sequence[str]) -> str:
