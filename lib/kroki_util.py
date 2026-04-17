@@ -203,7 +203,27 @@ def build_legend_svg(diagram_svg: str, palette: dict[str, str]) -> str:
 
 
 def inject_caption(svg: str, caption: str) -> str:
-    raise NotImplementedError
+    """Append a caption strip (24px tall) below the diagram.
+
+    Produces a new outer <svg> that stacks the input diagram on top and a
+    <text> element underneath. Implemented as a stitch with a generated
+    caption-SVG so sizing is consistent with stitch_svgs_vertical().
+    """
+    w, _ = bounding_box(svg)
+    caption_h = 24
+    # Escape special chars so arbitrary text doesn't break XML.
+    safe = (
+        caption.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+    caption_svg = (
+        f'<svg xmlns="{SVG_NS}" '
+        f'viewBox="0 0 {_fmt_dim(w)} {caption_h}" '
+        f'width="{_fmt_dim(w)}" height="{caption_h}">'
+        f'<text x="4" y="{caption_h - 8}" '
+        f'font-family="sans-serif" font-size="12" font-style="italic">'
+        f'{safe}</text></svg>'
+    )
+    return stitch_svgs_vertical([svg, caption_svg])
 
 
 def _cli(argv: list[str] | None = None) -> int:

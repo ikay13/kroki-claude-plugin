@@ -137,3 +137,13 @@ def test_build_legend_svg_auto_filters_used_colors() -> None:
     # Legend must be a valid SVG with a sensible bounding box.
     w, h = bounding_box(legend)
     assert w > 0 and h > 0
+
+
+def test_inject_caption_adds_text_and_expands_viewbox() -> None:
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"/>'
+    out = inject_caption(svg, "Figure -- MSP Architecture")
+    assert "Figure -- MSP Architecture" in out
+    w, h = bounding_box(out)
+    assert w == 100.0
+    # Height grows by the caption strip (24px by convention).
+    assert h > 50.0
