@@ -6,8 +6,8 @@ This reference codifies how `kroki-obsidian` places diagrams in an Obsidian vaul
 
 | Category | Folder | Versioning | Examples |
 |----------|--------|-----------|----------|
-| **Reference** (living project artifacts) | `diagrams/` | Overwrites current — git preserves history for rollback | Architecture, data flow, components, dependencies, ERD, HLD/LLD |
 | **Session** (narrative artifacts) | `sessions/` | Accumulates — each session yields distinct files, never overwritten | Bug flow, before/after, troubleshooting trace, decision walkthrough |
+| **Reference** (living project artifacts) | `diagrams/` | Overwrites current — git preserves history for rollback | Architecture, data flow, components, dependencies, ERD, HLD/LLD |
 
 A project can have both folders; `kroki-obsidian` routes based on the `category` input (`session` or `reference`).
 
@@ -18,12 +18,12 @@ A project can have both folders; `kroki-obsidian` routes based on the `category`
 ├── <project> Project.md         # tracker
 ├── diagrams/                    # symlink -> ~/<repo>/diagrams/
 │   ├── INDEX.md                 # auto-generated
-│   ├── arch-<project>-<topic>.puml
+│   ├── arch-<project>-<topic>.puml     # source ext varies by language (.mmd, .d2, .gv, ...)
 │   ├── arch-<project>-<topic>.light.svg
 │   └── arch-<project>-<topic>.dark.svg
 └── sessions/
     ├── YYYY-MM-DD-<project>-session-NN.md
-    ├── YYYY-MM-DD-<project>-bug-<topic>.puml
+    ├── YYYY-MM-DD-<project>-bug-<topic>.puml    # source ext varies by language
     ├── YYYY-MM-DD-<project>-bug-<topic>.light.svg
     └── YYYY-MM-DD-<project>-bug-<topic>.dark.svg
 ```
@@ -48,6 +48,8 @@ YYYY-MM-DD-<project>-<prefix>-<topic>.<ext>
 
 Example: `2026-04-17-MSP-bug-adapter-routing.puml`
 
+**Casing:** reference slugs are lowercase (`<project-slug>`) for URL- and filesystem-portability across tools. Session filenames preserve the vault-folder casing (`<project>`) to match the session-log filename convention used by `session-continuity.md` (e.g., `YYYY-MM-DD-MSP-session-NN.md`).
+
 `<prefix>` is one of the SE/SW/PM-aligned prefixes in `styles/naming-prefixes.md`. Adding a new prefix = one row in that table; no code change.
 
 ## Collision resolution
@@ -57,7 +59,7 @@ Example: `2026-04-17-MSP-bug-adapter-routing.puml`
 
 ## Symlink safety
 
-`ensure-symlink.sh` is strictly additive:
+`ensure-symlink.sh` (implemented in Plan 3 Task 6) is strictly additive:
 
 - If the vault's `diagrams/` is already a symlink pointing to the repo's `diagrams/` → exit 0 (no change).
 - If the target path exists as a regular directory or file → exit 1 (user resolves manually). The script will **not** overwrite existing content.
