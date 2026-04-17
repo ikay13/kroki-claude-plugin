@@ -11,7 +11,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 SVG_NS = "http://www.w3.org/2000/svg"
 ET.register_namespace("", SVG_NS)
@@ -28,7 +28,7 @@ DARK_REMAP: dict[str, str] = {
 # xml.etree chokes on the external-DTD DOCTYPE, so we strip both before parsing.
 # Substitution-only helpers (dark_remap, flatten_css_vars) don't need this.
 _PREAMBLE_RE = re.compile(
-    r"<\?xml[^>]*\?>\s*|<!DOCTYPE[^>]*(?:\[[^\]]*\])?[^>]*>\s*",
+    r"<\?xml[^>]*\?>\s*|<!DOCTYPE[^>\[]*(?:\[[^\]]*\])?[^>]*>\s*",
     re.IGNORECASE,
 )
 
