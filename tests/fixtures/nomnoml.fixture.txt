@@ -1,0 +1,4 @@
+[Pirate|- eyeCount: Int|o raid();o pillage()|
+  [beard]--[parrot]
+  [beard]-:>[foul mouth]
+]

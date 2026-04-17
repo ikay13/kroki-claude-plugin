@@ -1,0 +1,3 @@
+box "Hello" fill skyblue
+arrow
+box "World" fill salmon
