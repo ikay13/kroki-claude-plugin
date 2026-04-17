@@ -1,0 +1,134 @@
+' Sequence: render.sh interaction with pod-health.sh + kroki CLI, incl. OOM detection and circuit breaker recovery
+@startuml
+!theme plain
+title render.sh -> pod-health.sh -> kroki CLI\nwith OOM detection and circuit breaker recovery
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 180
+
+actor Claude as C
+participant "render.sh" as R
+participant "pod-health.sh" as H
+database "State dir\n~/.kroki-plugin/" as S
+participant "kroki.sh\n(pod mgr)" as K
+participant "Podman pod\nkroki-gateway\n:8000" as P
+participant "kroki CLI\n~/go/bin/kroki" as CLI
+
+C -> R : render.sh <source.puml>
+activate R
+
+R -> H : exec pod-health.sh
+activate H
+
+H -> S : touch .last-use
+
+== Circuit breaker gate ==
+H -> S : read .pod-circuit-open
+alt circuit OPEN and age <= 600s
+    H --> R : exit 1\n"CIRCUIT OPEN: rendering disabled"
+    R --> C : exit 1 (pod unhealthy)
+else circuit stale (> 600s) or absent
+    H -> S : rm .pod-circuit-open\n    .pod-restart-count
+end
+
+== Liveness probe ==
+H -> P : curl -sf -m 5 http://localhost:8000
+alt pod healthy (HTTP 200)
+    P --> H : 200 OK
+    H --> R : exit 0
+else unhealthy / no response
+
+    == Recovery branch ==
+    alt pod container running but wedged
+        H -> S : increment .pod-restart-count
+        H -> K : kroki.sh down
+        K -> P : podman pod stop + rm
+        H -> K : kroki.sh up
+        K -> P : podman pod create + run
+        loop up to 15 polls * 2s = 30s
+            H -> P : curl health
+            alt healthy
+                P --> H : 200 OK
+                H -> S : rm .pod-restart-count (reset)
+                H --> R : exit 0
+            else not yet
+                P --> H : fail
+            end
+        end
+    else pod not running (Created/Exited/missing)
+        H -> K : kroki.sh up
+        K -> P : podman pod create + run
+        loop up to 15 polls * 2s = 30s
+            H -> P : curl health
+            alt healthy
+                P --> H : 200 OK
+                H -> S : rm .pod-restart-count
+                H --> R : exit 0
+            else not yet
+                P --> H : fail
+            end
+        end
+        H -> S : increment .pod-restart-count\n(first attempt failed)
+    end
+
+    == Retry or trip breaker ==
+    note over H
+      If restart_count < MAX_RESTARTS (2):
+        retry start_pod / restart_pod once more.
+      If restart_count >= 2:
+        trip circuit breaker below.
+    end note
+
+    H -> S : read .pod-restart-count
+    alt count < 2
+        H -> K : (retry start_pod)
+        K -> P : podman pod run
+        H -> P : poll health (30s)
+        alt recovered
+            P --> H : 200 OK
+            H -> S : rm .pod-restart-count
+            H --> R : exit 0
+        else still dead
+            H -> S : increment .pod-restart-count -> 2
+        end
+    end
+
+    == Circuit breaker trip + OOM diagnosis ==
+    alt count >= 2
+        H -> S : write .pod-circuit-open = now()
+        H -> P : podman inspect kroki-gateway\n--format {{.State.ExitCode}}
+        alt exit code == 137 (SIGKILL / OOM)
+            P --> H : 137
+            H --> C : "OOM DETECTED: container killed\n(memory pressure)"
+            H --> C : free -h -> report available RAM
+        else other exit code
+            P --> H : <code>
+            H --> C : "pod failed to stabilize"
+        end
+        H --> R : exit 1
+        R --> C : exit 1 (pod unhealthy)
+    end
+end
+deactivate H
+
+== Render (only reached if pod healthy) ==
+R -> S : date +%s > .last-use
+R -> CLI : kroki convert <source>\n--format svg --out-file <tmp>
+activate CLI
+CLI -> P : POST /<type>/svg (source payload)
+P --> CLI : SVG bytes
+CLI --> R : write <output>.svg.tmp, exit 0
+deactivate CLI
+
+alt render succeeded and tmp non-empty
+    R -> R : mv <tmp> -> <output>.svg\n(atomic)
+    R --> C : stdout = output path, exit 0
+else kroki CLI error or empty output
+    R -> R : rm tmp + stderr dump
+    R --> C : exit 2 "Kroki render failed"
+end
+
+deactivate R
+
+@enduml
