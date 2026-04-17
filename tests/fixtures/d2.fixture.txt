@@ -1,0 +1,10 @@
+server: API Server
+db: Database {
+  shape: cylinder
+}
+client: Web Client
+
+client -> server: HTTP Request
+server -> db: Query
+db -> server: Result
+server -> client: JSON Response

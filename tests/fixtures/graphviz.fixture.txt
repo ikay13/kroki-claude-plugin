@@ -1,0 +1,8 @@
+digraph {
+    rankdir=LR
+    node [shape=box]
+    A [label="Input"]
+    B [label="Process"]
+    C [label="Output"]
+    A -> B -> C
+}

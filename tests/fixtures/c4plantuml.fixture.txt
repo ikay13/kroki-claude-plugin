@@ -1,0 +1,10 @@
+@startuml
+!include <C4/C4_Context>
+
+Person(user, "User", "A human user")
+System(system, "My System", "Does useful things")
+System_Ext(ext, "External API", "Third party service")
+
+Rel(user, system, "Uses")
+Rel(system, ext, "Calls")
+@enduml
