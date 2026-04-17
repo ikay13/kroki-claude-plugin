@@ -7,7 +7,7 @@ A multi-skill Claude Code plugin for diagram generation, rendering, and embeddin
 | Skill | Purpose |
 |-------|---------|
 | `kroki` | Core rendering — generates diagram source, renders via Kroki, returns file path |
-| `kroki-obsidian` | Obsidian vault integration — embeds diagrams in .md files (Plan 3) |
+| `kroki-obsidian` | Obsidian vault integration — embeds dual-theme diagrams, maintains `diagrams/INDEX.md`, manages vault symlink and CSS snippet |
 | `kroki-session` | Session bookend automation — surfaces/refreshes diagrams (Plan 5) |
 | `kroki-help` | Reference — syntax, tools, recommendation matrix (Plan 4) |
 
@@ -22,3 +22,10 @@ A multi-skill Claude Code plugin for diagram generation, rendering, and embeddin
 1. Register plugin: `claude plugin add ~/kroki-claude-plugin/`
 2. Start Kroki: `~/kroki/kroki.sh up`
 3. Ask Claude: "Draw a sequence diagram of user authentication"
+
+## Obsidian Theme Install (optional, one-time)
+
+Enable dual-theme diagram rendering in Obsidian:
+
+1. Run: `~/kroki-claude-plugin/scripts/install-vault-theme.sh ~/Documents/Obsidian\ Vault`
+2. In Obsidian: **Settings → Appearance → CSS snippets** → toggle `kroki-theme` on.
