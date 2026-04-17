@@ -86,8 +86,19 @@ def bounding_box(svg: str) -> tuple[float, float]:
     return w, h
 
 
+_CSS_VAR_RE = re.compile(
+    r"var\(\s*--[\w-]+\s*,\s*(#[0-9A-Fa-f]{3,8}|[\w-]+)\s*\)"
+)
+
+
 def flatten_css_vars(svg: str) -> str:
-    raise NotImplementedError
+    """Replace every `var(--name, fallback)` with its fallback literal.
+
+    Operates on the raw SVG string (covers <style> bodies, inline `style=`,
+    and attribute values uniformly). `var(--name)` without a fallback is
+    left unchanged in v1 — a higher-level caller (Plan 6 a11y-check) warns.
+    """
+    return _CSS_VAR_RE.sub(lambda m: m.group(1), svg)
 
 
 def dark_remap(svg: str) -> str:

@@ -51,3 +51,19 @@ def test_bounding_box_from_viewbox_with_kroki_preamble() -> None:
 def test_bounding_box_from_width_height() -> None:
     svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200pt" height="150pt"/>'
     assert bounding_box(svg) == (200.0, 150.0)
+
+
+def test_flatten_css_vars_replaces_with_hex_fallback() -> None:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<style>.bg { fill: var(--kroki-bg, #F7F7F7); } '
+        '.accent { stroke: var(--kroki-accent, #0072B2); }</style>'
+        '<rect fill="var(--kroki-muted, #808080)"/></svg>'
+    )
+    out = flatten_css_vars(svg)
+    assert "var(--kroki-bg" not in out
+    assert "var(--kroki-accent" not in out
+    assert "var(--kroki-muted" not in out
+    assert "#F7F7F7" in out
+    assert "#0072B2" in out
+    assert "#808080" in out
