@@ -1,0 +1,11 @@
+[Person]
+*name
+height
+weight
++birth_place_id
+
+[Birthplace]
+*id
+city
+
+Person *--1 Birthplace

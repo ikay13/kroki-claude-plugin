@@ -1,0 +1,9 @@
+Table users {
+  id integer [primary key]
+  email varchar [unique, not null]
+}
+
+Table orders {
+  id integer [primary key]
+  user_id integer [ref: > users.id]
+}
