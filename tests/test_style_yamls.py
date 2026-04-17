@@ -30,3 +30,13 @@ def test_symbols_yaml_loads_and_has_glyph_and_meaning():
     for entry in data["symbols"]:
         assert "glyph" in entry
         assert "meaning" in entry
+
+
+def test_abbreviations_yaml_loads_and_has_entries():
+    data = load("abbreviations.yml")
+    assert "abbreviations" in data
+    assert isinstance(data["abbreviations"], dict)
+    # At least a few well-known abbreviations expected
+    assert "API" in data["abbreviations"]
+    for exp in data["abbreviations"].values():
+        assert isinstance(exp, str) and len(exp) > 0
