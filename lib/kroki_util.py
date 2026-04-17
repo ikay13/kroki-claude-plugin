@@ -121,7 +121,38 @@ def dark_remap(svg: str) -> str:
 
 
 def stitch_svgs_vertical(svgs: Sequence[str]) -> str:
-    raise NotImplementedError
+    """Compose input SVGs vertically into a single SVG.
+
+    New viewBox is (0, 0, max_width, sum_height). Each input is nested as a
+    child <svg> element with y offset equal to the accumulated height. The
+    namespace declaration is emitted once on the outer <svg>.
+    """
+    if not svgs:
+        raise ValueError("stitch_svgs_vertical requires at least one SVG")
+    dims = [bounding_box(s) for s in svgs]
+    total_w = max(w for w, _ in dims)
+    total_h = sum(h for _, h in dims)
+
+    children: list[str] = []
+    y = 0.0
+    for svg, (w, h) in zip(svgs, dims):
+        inner = ET.fromstring(_strip_preamble(svg))
+        inner.set("x", "0")
+        inner.set("y", str(y))
+        inner.set("width", str(w))
+        inner.set("height", str(h))
+        # Force viewBox so nested coordinate system matches input.
+        if inner.get("viewBox") is None:
+            inner.set("viewBox", f"0 0 {w} {h}")
+        children.append(ET.tostring(inner, encoding="unicode"))
+        y += h
+
+    body = "".join(children)
+    return (
+        f'<svg xmlns="{SVG_NS}" '
+        f'viewBox="0 0 {total_w} {total_h}" '
+        f'width="{total_w}" height="{total_h}">{body}</svg>'
+    )
 
 
 def build_legend_svg(diagram_svg: str, palette: dict[str, str]) -> str:

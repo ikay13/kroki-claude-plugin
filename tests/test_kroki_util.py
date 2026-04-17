@@ -102,3 +102,15 @@ def test_dark_remap_preserves_okabe_ito_accents() -> None:
     out = dark_remap(svg)
     for accent in ("#E69F00", "#56B4E9", "#009E73", "#0072B2", "#D55E00", "#CC79A7"):
         assert accent in out
+
+
+def test_stitch_svgs_vertical_combines_dimensions() -> None:
+    a = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><rect/></svg>'
+    b = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 30"><circle/></svg>'
+    out = stitch_svgs_vertical([a, b])
+    w, h = bounding_box(out)
+    assert w == 100.0  # max of 100 and 80
+    assert h == 80.0   # 50 + 30
+    # Both child shapes must survive.
+    assert "<rect" in out
+    assert "<circle" in out
