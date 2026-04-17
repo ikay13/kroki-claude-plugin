@@ -74,10 +74,16 @@ if grep -qF "[[${BASENAME}.light.svg]]" "$TARGET"; then
     exit 0
 fi
 
-# Build the block with embedded newlines
+# Build the block with embedded newlines.
+# Blank lines inside <div>...</div> are REQUIRED so Obsidian's CommonMark
+# renderer treats the wikilinks as markdown (not raw HTML). Without the blank
+# lines, the div opens an HTML block and the ![[...]] wikilinks render as
+# literal text instead of embedded images.
 BLOCK='<div class="kroki-dual">
+
 ![['"${BASENAME}"'.light.svg]]
 ![['"${BASENAME}"'.dark.svg]]
+
 </div>'
 if [[ -n "$CAPTION" ]]; then
     BLOCK="${BLOCK}

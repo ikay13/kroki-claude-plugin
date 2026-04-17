@@ -4,15 +4,27 @@
  * produced by scripts/embed-in-md.sh. Install target:
  *   <vault-root>/.obsidian/snippets/kroki-theme.css
  * Enable in Obsidian: Settings -> Appearance -> CSS snippets -> kroki-theme.
- */
-
-.theme-light .kroki-dual img[src$=".dark.svg"]  { display: none; }
-.theme-dark  .kroki-dual img[src$=".light.svg"] { display: none; }
-
-/* Global fallback (opt-in). Uncomment if your Obsidian version strips
- * the <div class="kroki-dual"> wrapper on render. These rules apply to
- * every image across the vault whose src ends in .dark.svg / .light.svg.
  *
- * .theme-light img[src$=".dark.svg"]  { display: none; }
- * .theme-dark  img[src$=".light.svg"] { display: none; }
+ * Uses bare attribute selectors (no element tag) so the rule matches both
+ * plain <img src="..."> tags AND Obsidian's <span class="internal-embed"
+ * src="..." alt="..."> wrapper elements. Both `src` and `alt` attributes
+ * are checked because Obsidian versions differ on which carries the filename.
  */
+
+.theme-light .kroki-dual [src$=".dark.svg"],
+.theme-light .kroki-dual [alt$=".dark.svg"]  { display: none !important; }
+
+.theme-dark  .kroki-dual [src$=".light.svg"],
+.theme-dark  .kroki-dual [alt$=".light.svg"] { display: none !important; }
+
+/* Global fallback — applies to every SVG embed in the vault whose src or alt
+ * ends in .dark.svg / .light.svg, NOT just those inside <div class="kroki-dual">.
+ * Enabled by default because Obsidian's markdown renderer can strip the custom
+ * wrapper div when its content is an empty line-delimited block. If you
+ * intentionally embed .light.svg / .dark.svg pairs OUTSIDE kroki diagrams and
+ * want both variants visible, comment this block out.
+ */
+.theme-light [src$=".dark.svg"],
+.theme-light [alt$=".dark.svg"]  { display: none !important; }
+.theme-dark  [src$=".light.svg"],
+.theme-dark  [alt$=".light.svg"] { display: none !important; }

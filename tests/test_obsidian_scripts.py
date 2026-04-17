@@ -186,6 +186,10 @@ class TestEmbedInMd:
         assert "[[arch-demo.dark.svg]]" in content
         assert "</div>" in content
         assert "*Figure -- Test caption*" in content
+        # Blank lines inside <div>...</div> are required so Obsidian parses
+        # the wikilinks as markdown instead of raw HTML.
+        assert '<div class="kroki-dual">\n\n![[arch-demo.light.svg]]' in content
+        assert "[[arch-demo.dark.svg]]\n\n</div>" in content
 
     def test_omits_caption_when_not_provided(self, tmp_path: Path) -> None:
         target = tmp_path / "note.md"

@@ -4,20 +4,23 @@ This reference documents exactly what `scripts/embed-in-md.sh` inserts into a ma
 
 ## The embed block
 
-Every diagram is embedded as a `<div class="kroki-dual">` wrapper containing **both** theme variants:
+Every diagram is embedded as a `<div class="kroki-dual">` wrapper containing **both** theme variants, with blank lines inside the div:
 
 ```markdown
 <div class="kroki-dual">
+
 ![[<basename>.light.svg]]
 ![[<basename>.dark.svg]]
+
 </div>
 *Figure -- <caption>*
 ```
 
 - `<basename>` is the diagram stem without extension (e.g., `arch-msp-overview`).
 - The trailing caption line is omitted when no caption is supplied.
+- **Blank lines inside the div are required.** Obsidian follows CommonMark's HTML-block rule — without blank lines, `<div>...</div>` is parsed as raw HTML and the `![[...]]` wikilinks render as literal text instead of embedded images.
 
-The wrapper div is required so the theme-switching CSS in `styles/kroki-theme.css` can hide the opposite-theme variant. Without the wrapper, both images would render stacked.
+The wrapper div provides semantic grouping. The actual theme switching is performed by the CSS snippet in `styles/kroki-theme.css`, which uses global attribute selectors (`[src$=".dark.svg"]`, `[alt$=".dark.svg"]`) rather than scoping to `.kroki-dual` — Obsidian's renderer strips custom classes from user-authored divs, so scoped rules don't match the rendered DOM.
 
 ## Why wikilinks, not Markdown image links
 
@@ -47,13 +50,16 @@ The `--` is a double hyphen (em-dash substitute) to visually separate "Figure" f
 The CSS snippet installed by `scripts/install-vault-theme.sh` is:
 
 ```css
-.theme-light .kroki-dual img[src$=".dark.svg"]  { display: none; }
-.theme-dark  .kroki-dual img[src$=".light.svg"] { display: none; }
+.theme-light [src$=".dark.svg"],
+.theme-light [alt$=".dark.svg"]  { display: none !important; }
+.theme-dark  [src$=".light.svg"],
+.theme-dark  [alt$=".light.svg"] { display: none !important; }
 ```
 
-- In **light theme**: the `.dark.svg` variant is hidden inside `.kroki-dual` wrappers.
-- In **dark theme**: the `.light.svg` variant is hidden.
-- Outside `.kroki-dual`: both variants display (useful for side-by-side comparison in analysis docs).
+- In **light theme**: any SVG whose `src` or `alt` ends in `.dark.svg` is hidden.
+- In **dark theme**: any SVG whose `src` or `alt` ends in `.light.svg` is hidden.
+- Rules are global (vault-wide), not scoped to `.kroki-dual` — Obsidian strips the custom class at render time, so scoped rules never match. Attribute selectors are used instead of `img[...]` because Obsidian wraps wikilink embeds in a `<span class="internal-embed" src="..." alt="...">` rather than an `<img>` tag.
+- Side effect: if you embed `.light.svg`/`.dark.svg` pairs **outside** kroki diagrams and want both variants visible, comment out the snippet's global rules. The `.kroki-dual` wrapper remains in the markup as semantic grouping but has no CSS effect in default Obsidian.
 
 ## Example: session log embed
 
@@ -72,8 +78,10 @@ scripts/embed-in-md.sh \
 ## Diagrams
 
 <div class="kroki-dual">
+
 ![[bug-adapter-routing.light.svg]]
 ![[bug-adapter-routing.dark.svg]]
+
 </div>
 *Figure -- Adapter routing failure path*
 ```
