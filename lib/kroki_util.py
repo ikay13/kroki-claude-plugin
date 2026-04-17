@@ -161,7 +161,45 @@ def stitch_svgs_vertical(svgs: Sequence[str]) -> str:
 
 
 def build_legend_svg(diagram_svg: str, palette: dict[str, str]) -> str:
-    raise NotImplementedError
+    """Generate a legend SVG showing only palette entries used in the diagram.
+
+    Scans diagram_svg for each hex in `palette` (case-insensitive, with a
+    trailing word boundary so `#000` doesn't spuriously match inside
+    `#0000FF`). Produces a one-column stitch of swatches + labels. Each row
+    is 24px tall; swatch is 16x16, label starts at x=24.
+    """
+
+    def _present(hex_: str) -> bool:
+        pattern = re.compile(re.escape(hex_) + r"(?![0-9A-Fa-f])", re.IGNORECASE)
+        return pattern.search(diagram_svg) is not None
+
+    used = [(name, hex_) for name, hex_ in palette.items() if _present(hex_)]
+    if not used:
+        return (
+            f'<svg xmlns="{SVG_NS}" viewBox="0 0 1 1" width="1" height="1"/>'
+        )
+
+    row_h = 24
+    label_x = 24
+    swatch = 16
+    width = 200
+    height = row_h * len(used)
+
+    rows: list[str] = []
+    for i, (name, hex_) in enumerate(used):
+        y = i * row_h
+        rows.append(
+            f'<rect x="0" y="{y + (row_h - swatch) // 2}" '
+            f'width="{swatch}" height="{swatch}" fill="{hex_}"/>'
+            f'<text x="{label_x}" y="{y + row_h - 6}" '
+            f'font-family="sans-serif" font-size="14">{name}</text>'
+        )
+
+    return (
+        f'<svg xmlns="{SVG_NS}" '
+        f'viewBox="0 0 {width} {height}" '
+        f'width="{width}" height="{height}">{"".join(rows)}</svg>'
+    )
 
 
 def inject_caption(svg: str, caption: str) -> str:

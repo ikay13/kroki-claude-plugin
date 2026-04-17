@@ -114,3 +114,26 @@ def test_stitch_svgs_vertical_combines_dimensions() -> None:
     # Both child shapes must survive.
     assert "<rect" in out
     assert "<circle" in out
+
+
+def test_build_legend_svg_auto_filters_used_colors() -> None:
+    # Diagram uses only orange and sky; palette has four entries — legend
+    # must contain only orange + sky labels, not green or vermilion.
+    diagram = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50">'
+        '<rect fill="#E69F00"/><circle stroke="#56B4E9"/></svg>'
+    )
+    palette = {
+        "orange": "#E69F00",
+        "sky": "#56B4E9",
+        "green": "#009E73",
+        "vermilion": "#D55E00",
+    }
+    legend = build_legend_svg(diagram, palette)
+    assert "orange" in legend
+    assert "sky" in legend
+    assert "green" not in legend
+    assert "vermilion" not in legend
+    # Legend must be a valid SVG with a sensible bounding box.
+    w, h = bounding_box(legend)
+    assert w > 0 and h > 0
