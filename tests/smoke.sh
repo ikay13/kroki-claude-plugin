@@ -133,6 +133,18 @@ else
     done
 fi
 
+# Python unit tests (Plan 2)
+if command -v python3 >/dev/null 2>&1; then
+    echo ""
+    echo "=== Python unit tests ==="
+    if ( cd "$PLUGIN_DIR" && python3 -m pytest tests/test_kroki_util.py -q ); then
+        echo "Python tests: PASS"
+    else
+        echo "Python tests: FAIL"
+        ((++fail))
+    fi
+fi
+
 echo ""
 echo "Results: $pass passed, $fail failed, $skip skipped ($total total)"
 
