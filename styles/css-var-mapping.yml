@@ -1,0 +1,31 @@
+# CSS variable -> light/dark fallback map.
+# Consumed by flatten.sh when reversing bg:css-vars output.
+
+vars:
+  --kroki-bg:
+    light: "#F7F7F7"
+    dark: "#2B2B2B"
+  --kroki-text:
+    light: "#1F1F1F"
+    dark: "#E6E6E6"
+  --kroki-stroke:
+    light: "#1F1F1F"
+    dark: "#E6E6E6"
+  --kroki-subtle-stroke:
+    light: "#CCCCCC"
+    dark: "#444444"
+  --kroki-muted:
+    light: "#808080"
+    dark: "#A0A0A0"
+  --kroki-accent-primary:
+    light: "#0072B2"
+    dark: "#0072B2"
+  --kroki-accent-warning:
+    light: "#E69F00"
+    dark: "#E69F00"
+  --kroki-accent-success:
+    light: "#009E73"
+    dark: "#009E73"
+  --kroki-accent-error:
+    light: "#D55E00"
+    dark: "#D55E00"

@@ -61,3 +61,12 @@ def test_named_palettes_load_and_have_overrides():
         assert "overrides" in data
         for hex_ in data["overrides"].values():
             assert hex_.startswith("#") and len(hex_) == 7
+
+
+def test_css_var_mapping_loads_with_light_and_dark():
+    data = load("css-var-mapping.yml")
+    assert "vars" in data
+    for entry in data["vars"].values():
+        assert "light" in entry and "dark" in entry
+        assert entry["light"].startswith("#")
+        assert entry["dark"].startswith("#")
