@@ -227,7 +227,33 @@ def inject_caption(svg: str, caption: str) -> str:
 
 
 def _cli(argv: list[str] | None = None) -> int:
-    raise NotImplementedError
+    parser = argparse.ArgumentParser(
+        prog="kroki_util",
+        description="SVG composition + remap + flatten helpers",
+    )
+    parser.add_argument(
+        "--op",
+        required=True,
+        choices=["dark-remap", "flatten", "caption"],
+        help="Operation to perform",
+    )
+    parser.add_argument("--in", dest="input", required=True, help="Input SVG path")
+    parser.add_argument("--out", dest="output", required=True, help="Output SVG path")
+    parser.add_argument("--caption", default="", help="Caption text (only for --op caption)")
+    args = parser.parse_args(argv)
+
+    src = Path(args.input).read_text(encoding="utf-8")
+    if args.op == "dark-remap":
+        result = dark_remap(src)
+    elif args.op == "flatten":
+        result = flatten_css_vars(src)
+    elif args.op == "caption":
+        result = inject_caption(src, args.caption)
+    else:  # argparse guarantees unreachable
+        return 2
+
+    atomic_write(Path(args.output), result)
+    return 0
 
 
 if __name__ == "__main__":
