@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# smoke.sh — Verify Kroki rendering pipeline works end-to-end.
+#
+# Usage:
+#   ./tests/smoke.sh          Quick mode (5 core fixtures)
+#   ./tests/smoke.sh --full   Full mode (all fixtures in tests/fixtures/)
+#
+# Checks per fixture:
+#   - render.sh exits 0
+#   - Output file exists and is >0 bytes
+#   - Output file starts with valid SVG header (<svg or <?xml)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+RENDER="$PLUGIN_DIR/scripts/render.sh"
+FIXTURES_DIR="$PLUGIN_DIR/tests/fixtures"
+OUTPUT_DIR=$(mktemp -d /tmp/kroki-smoke-XXXXXX)
+
+FULL_MODE=false
+if [[ "${1:-}" == "--full" ]]; then
+    FULL_MODE=true
+fi
+
+# Language type mapping (filename stem -> kroki type)
+declare -A TYPE_MAP=(
+    [plantuml]=plantuml
+    [mermaid]=mermaid
+    [graphviz]=graphviz
+    [d2]=d2
+    [c4plantuml]=c4plantuml
+    [actdiag]=actdiag
+    [blockdiag]=blockdiag
+    [bpmn]=bpmn
+    [bytefield]=bytefield
+    [dbml]=dbml
+    [diagramsnet]=diagramsnet
+    [ditaa]=ditaa
+    [erd]=erd
+    [excalidraw]=excalidraw
+    [nomnoml]=nomnoml
+    [nwdiag]=nwdiag
+    [packetdiag]=packetdiag
+    [pikchr]=pikchr
+    [rackdiag]=rackdiag
+    [seqdiag]=seqdiag
+    [structurizr]=structurizr
+    [svgbob]=svgbob
+    [symbolator]=symbolator
+    [tikz]=tikz
+    [umlet]=umlet
+    [vega]=vega
+    [vegalite]=vegalite
+    [wavedrom]=wavedrom
+    [wireviz]=wireviz
+)
+
+CORE_FIXTURES=(plantuml mermaid graphviz d2 c4plantuml)
+
+pass=0
+fail=0
+skip=0
+total=0
+
+run_fixture() {
+    local name="$1"
+    local fixture_file="$FIXTURES_DIR/${name}.fixture.txt"
+    local diagram_type="${TYPE_MAP[$name]:-$name}"
+
+    if [[ ! -f "$fixture_file" ]]; then
+        printf "  SKIP  %-20s (fixture not found)\n" "$name"
+        ((++skip))
+        return
+    fi
+
+    ((++total))
+
+    local output
+    if output=$("$RENDER" "$fixture_file" --type "$diagram_type" --format svg --out "$OUTPUT_DIR" 2>&1); then
+        local output_file="$OUTPUT_DIR/${name}.fixture.svg"
+        if [[ -s "$output_file" ]]; then
+            local header
+            header=$(head -c 100 "$output_file")
+            if [[ "$header" == *"<svg"* ]] || [[ "$header" == *"<?xml"* ]]; then
+                printf "  PASS  %-20s (%s bytes)\n" "$name" "$(wc -c < "$output_file")"
+                ((++pass))
+                return
+            else
+                printf "  FAIL  %-20s (invalid SVG header)\n" "$name"
+            fi
+        else
+            printf "  FAIL  %-20s (empty output)\n" "$name"
+        fi
+    else
+        printf "  FAIL  %-20s (render error: %s)\n" "$name" "$output"
+    fi
+    ((++fail))
+}
+
+echo "Kroki Smoke Test"
+echo "================"
+echo ""
+
+# Pod health check first
+echo "Checking pod health..."
+if ! "$PLUGIN_DIR/scripts/pod-health.sh"; then
+    echo "BLOCKED: Pod unavailable. Cannot run smoke tests."
+    exit 1
+fi
+echo ""
+
+if $FULL_MODE; then
+    echo "Mode: FULL (all fixtures)"
+    for fixture_file in "$FIXTURES_DIR"/*.fixture.txt; do
+        name=$(basename "$fixture_file" .fixture.txt)
+        run_fixture "$name"
+    done
+else
+    echo "Mode: QUICK (5 core fixtures)"
+    for name in "${CORE_FIXTURES[@]}"; do
+        run_fixture "$name"
+    done
+fi
+
+echo ""
+echo "Results: $pass passed, $fail failed, $skip skipped ($total total)"
+
+# Cleanup
+rm -rf "$OUTPUT_DIR"
+
+if (( fail > 0 )); then
+    exit 1
+fi
+exit 0
