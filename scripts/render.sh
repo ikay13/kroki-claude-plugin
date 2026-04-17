@@ -91,6 +91,30 @@ date +%s > "$LAST_USE_FILE"
 # Step 2: Build kroki CLI args
 KROKI_ARGS=("convert" "$SOURCE" "--format" "$OUTPUT_FORMAT" "--out-file" "$TEMP_FILE")
 
+# Infer diagram type from extension when not explicitly provided.
+# The kroki CLI does not recognise all common aliases (.mmd, .puml, .pu, etc.)
+# so we map them here before handing off.
+if [[ -z "$DIAGRAM_TYPE" ]]; then
+    case "${SOURCE##*.}" in
+        puml|pu|iuml)  DIAGRAM_TYPE="plantuml" ;;
+        mmd)           DIAGRAM_TYPE="mermaid" ;;
+        gv)            DIAGRAM_TYPE="graphviz" ;;
+        adia)          DIAGRAM_TYPE="actdiag" ;;
+        bdia)          DIAGRAM_TYPE="blockdiag" ;;
+        ndia)          DIAGRAM_TYPE="nwdiag" ;;
+        pdia)          DIAGRAM_TYPE="packetdiag" ;;
+        rdia)          DIAGRAM_TYPE="rackdiag" ;;
+        sdia)          DIAGRAM_TYPE="seqdiag" ;;
+        nml)           DIAGRAM_TYPE="nomnoml" ;;
+        pik)           DIAGRAM_TYPE="pikchr" ;;
+        sbob)          DIAGRAM_TYPE="svgbob" ;;
+        dsl)           DIAGRAM_TYPE="structurizr" ;;
+        vhdl)          DIAGRAM_TYPE="symbolator" ;;
+        tex)           DIAGRAM_TYPE="tikz" ;;
+        uxf)           DIAGRAM_TYPE="umlet" ;;
+    esac
+fi
+
 if [[ -n "$DIAGRAM_TYPE" ]]; then
     KROKI_ARGS+=("--type" "$DIAGRAM_TYPE")
 fi
