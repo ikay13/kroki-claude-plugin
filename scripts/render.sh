@@ -179,7 +179,7 @@ if (( emit_dark == 1 )); then
     OUT="$OUTPUT_DIR/${SOURCE_NAME}.dark.${OUTPUT_FORMAT}"
     if ! python3 "$PY_UTIL" --op dark-remap --in "$BASE_TMP" --out "$OUT"; then
         echo "Error: dark-remap failed for $SOURCE" >&2
-        rm -f "$BASE_TMP"
+        rm -f "$BASE_TMP" "$OUTPUT_DIR/${SOURCE_NAME}.light.${OUTPUT_FORMAT}"
         exit 2
     fi
     written+=("$OUT")
