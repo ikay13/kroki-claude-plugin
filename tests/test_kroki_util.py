@@ -13,3 +13,25 @@ from lib.kroki_util import (
     inject_caption,
     stitch_svgs_vertical,
 )
+
+
+def test_atomic_write_writes_content(tmp_path: Path) -> None:
+    target = tmp_path / "out.svg"
+    atomic_write(target, "<svg/>")
+    assert target.read_text() == "<svg/>"
+    # temp file must not linger
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_cleans_tempfile_on_error(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "out.svg"
+
+    def boom(self, *a, **kw):
+        raise OSError("disk full")
+
+    # Force Path.replace to fail AFTER temp file is written.
+    monkeypatch.setattr(Path, "replace", boom)
+    with pytest.raises(OSError):
+        atomic_write(target, "<svg/>")
+    assert not target.exists()
+    assert list(tmp_path.glob("*.tmp")) == []

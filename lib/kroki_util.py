@@ -39,7 +39,24 @@ def _strip_preamble(svg: str) -> str:
 
 
 def atomic_write(path: Path, content: str | bytes, *, encoding: str = "utf-8") -> None:
-    raise NotImplementedError
+    """Write content to path via temp file + atomic rename. Cleans up on error."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=path.name + ".",
+        suffix=".tmp",
+        delete=False,
+    ) as fh:
+        temp = Path(fh.name)
+        data = content.encode(encoding) if isinstance(content, str) else content
+        fh.write(data)
+    try:
+        temp.replace(path)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
 
 
 def bounding_box(svg: str) -> tuple[float, float]:
