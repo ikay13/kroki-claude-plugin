@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "description": "Diagram generation, rendering, and embedding via self-hosted Kroki server. Supports 29 diagram languages including PlantUML, Mermaid, Graphviz, D2, C4, and more.",
   "author": {
-    "name": "orin"
+    "name": "James Isaac Kay",
+    "email": "isaackay14@gmail.com"
   },
   "license": "MIT",
   "keywords": [

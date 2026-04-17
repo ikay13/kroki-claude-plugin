@@ -1,7 +1,8 @@
 {
   "name": "kroki-local",
   "owner": {
-    "name": "orin"
+    "name": "James Isaac Kay",
+    "email": "isaackay14@gmail.com"
   },
   "metadata": {
     "description": "Local personal marketplace for the kroki diagram plugin."
