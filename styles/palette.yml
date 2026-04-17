@@ -1,0 +1,40 @@
+# Okabe-Ito colorblind-safe palette + extended neutrals + layer gradient.
+# See palette.md for rationale and usage guidelines.
+
+okabe_ito:
+  ink: "#000000"
+  orange: "#E69F00"
+  sky: "#56B4E9"
+  green: "#009E73"
+  yellow: "#F0E442"
+  blue: "#0072B2"
+  vermilion: "#D55E00"
+  pink: "#CC79A7"
+
+extended:
+  bg_light: "#F7F7F7"
+  bg_dark: "#2B2B2B"
+  text_light: "#1F1F1F"
+  text_dark: "#E6E6E6"
+  subtle_stroke_light: "#CCCCCC"
+  subtle_stroke_dark: "#444444"
+  muted_light: "#808080"
+  muted_dark: "#A0A0A0"
+
+layer_gradient:
+  # Architectural layer tint (L0 outermost, L4 core). Viridis-adjacent.
+  L0: "#E8F4FD"
+  L1: "#B6DAF0"
+  L2: "#5FA8D3"
+  L3: "#2C7FB8"
+  L4: "#0B5A94"
+
+semantic_roles:
+  ink: "Text, default strokes"
+  orange: "Warning, queue, async"
+  sky: "External system, API"
+  green: "Success, primary path"
+  yellow: "Caution, optional"
+  blue: "Core subsystem"
+  vermilion: "Error, critical"
+  pink: "Test, auxiliary"
