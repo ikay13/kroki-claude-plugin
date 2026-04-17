@@ -96,11 +96,14 @@ if [[ -n "$DIAGRAM_TYPE" ]]; then
 fi
 
 # Step 3: Render to temp file (atomic write pattern)
-if ! "$KROKI_CLI" "${KROKI_ARGS[@]}" 2>&1; then
+KROKI_STDERR="$(mktemp)"
+if ! "$KROKI_CLI" "${KROKI_ARGS[@]}" 2>"$KROKI_STDERR"; then
+    cat "$KROKI_STDERR" >&2
+    rm -f "$KROKI_STDERR" "$TEMP_FILE"
     echo "Error: Kroki render failed for $SOURCE" >&2
-    rm -f "$TEMP_FILE"
     exit 2
 fi
+rm -f "$KROKI_STDERR"
 
 # Step 4: Verify output
 if [[ ! -s "$TEMP_FILE" ]]; then
