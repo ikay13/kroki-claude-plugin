@@ -77,25 +77,35 @@ run_fixture() {
     ((++total))
 
     local output
-    if output=$("$RENDER" "$fixture_file" --type "$diagram_type" --format svg --out "$OUTPUT_DIR" 2>&1); then
-        local output_file="$OUTPUT_DIR/${name}.fixture.svg"
-        if [[ -s "$output_file" ]]; then
-            local header
-            header=$(head -c 100 "$output_file")
-            if [[ "$header" == *"<svg"* ]] || [[ "$header" == *"<?xml"* ]]; then
-                printf "  PASS  %-20s (%s bytes)\n" "$name" "$(wc -c < "$output_file")"
-                ((++pass))
-                return
-            else
-                printf "  FAIL  %-20s (invalid SVG header)\n" "$name"
-            fi
-        else
-            printf "  FAIL  %-20s (empty output)\n" "$name"
-        fi
-    else
+    if ! output=$("$RENDER" "$fixture_file" --type "$diagram_type" --format svg --out "$OUTPUT_DIR" 2>&1); then
         printf "  FAIL  %-20s (render error: %s)\n" "$name" "$output"
+        ((++fail))
+        return
     fi
-    ((++fail))
+
+    local light="$OUTPUT_DIR/${name}.fixture.light.svg"
+    local dark="$OUTPUT_DIR/${name}.fixture.dark.svg"
+
+    for variant in "$light" "$dark"; do
+        if [[ ! -s "$variant" ]]; then
+            printf "  FAIL  %-20s (missing/empty: %s)\n" "$name" "$(basename "$variant")"
+            ((++fail))
+            return
+        fi
+        local header
+        header=$(head -c 100 "$variant")
+        if [[ "$header" != *"<svg"* ]] && [[ "$header" != *"<?xml"* ]]; then
+            printf "  FAIL  %-20s (invalid SVG header: %s)\n" "$name" "$(basename "$variant")"
+            ((++fail))
+            return
+        fi
+    done
+
+    local light_bytes dark_bytes
+    light_bytes=$(wc -c < "$light")
+    dark_bytes=$(wc -c < "$dark")
+    printf "  PASS  %-20s (light=%s dark=%s bytes)\n" "$name" "$light_bytes" "$dark_bytes"
+    ((++pass))
 }
 
 echo "Kroki Smoke Test"
