@@ -1,0 +1,16 @@
+# Nature journal palette — muted primaries, higher contrast with white bg.
+# Based on Nature's published figure guidelines (SciStyle survey 2023).
+
+name: nature
+base: okabe_ito
+description: >
+  Nature journal preference — shifts accents toward muted, publication-safe
+  tones. Maintains colorblind distinguishability.
+
+overrides:
+  orange: "#D97F00"
+  sky: "#4A90D9"
+  green: "#008060"
+  blue: "#005A8E"
+  vermilion: "#B04000"
+  pink: "#A05E88"

@@ -50,3 +50,14 @@ def test_legend_template_yaml_loads_with_placements_and_sections():
     assert {"color_key", "symbol_key", "abbreviations", "footer"} <= set(
         data["sections"].keys()
     )
+
+
+def test_named_palettes_load_and_have_overrides():
+    for name in ("nature", "ieee"):
+        data = yaml.safe_load((STYLES / "palettes" / f"{name}.yml").read_text())
+        assert "name" in data
+        assert "base" in data
+        assert data["base"] == "okabe_ito"
+        assert "overrides" in data
+        for hex_ in data["overrides"].values():
+            assert hex_.startswith("#") and len(hex_) == 7

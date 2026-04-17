@@ -1,0 +1,16 @@
+# IEEE palette — heavy blue + black emphasis, minimal accent variety.
+# IEEE figures typically use 3-4 colors max for clarity in monochrome print.
+
+name: ieee
+base: okabe_ito
+description: >
+  IEEE publication preference — blue/red/black dominant, minimal accents.
+  Grayscale fallback matters heavily for print journals.
+
+overrides:
+  ink: "#000000"
+  blue: "#003F7F"
+  vermilion: "#AA0000"
+  sky: "#3376B8"
+  green: "#006400"
+  orange: "#AA6600"
