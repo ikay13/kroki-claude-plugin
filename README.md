@@ -77,6 +77,8 @@ tests/verify-install.sh
 
 Runs 7 checks and reports pass/fail per check.
 
+Flags (`--skip-systemd`, `--skip-pod`, `--skip-smoke`) are **not inherited** from `install.sh`. If you ran `install.sh --skip-systemd`, pass the same flag to `verify-install.sh` or the timer check will report a false FAIL.
+
 ## Style system
 
 Machine-readable YAML style files in `styles/`:
