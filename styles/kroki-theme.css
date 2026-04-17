@@ -1,0 +1,18 @@
+/* Kroki dual-render theme switching
+ *
+ * Hides the opposite-theme variant inside <div class="kroki-dual"> wrappers
+ * produced by scripts/embed-in-md.sh. Install target:
+ *   <vault-root>/.obsidian/snippets/kroki-theme.css
+ * Enable in Obsidian: Settings -> Appearance -> CSS snippets -> kroki-theme.
+ */
+
+.theme-light .kroki-dual img[src$=".dark.svg"]  { display: none; }
+.theme-dark  .kroki-dual img[src$=".light.svg"] { display: none; }
+
+/* Global fallback (opt-in). Uncomment if your Obsidian version strips
+ * the <div class="kroki-dual"> wrapper on render. These rules apply to
+ * every image across the vault whose src ends in .dark.svg / .light.svg.
+ *
+ * .theme-light img[src$=".dark.svg"]  { display: none; }
+ * .theme-dark  img[src$=".light.svg"] { display: none; }
+ */
