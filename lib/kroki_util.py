@@ -38,6 +38,11 @@ def _strip_preamble(svg: str) -> str:
     return _PREAMBLE_RE.sub("", svg, count=2).lstrip()
 
 
+def _fmt_dim(v: float) -> str:
+    """Format a dimension as int when whole, else as float."""
+    return str(int(v)) if v == int(v) else str(v)
+
+
 def atomic_write(path: Path, content: str | bytes, *, encoding: str = "utf-8") -> None:
     """Write content to path via temp file + atomic rename. Cleans up on error."""
     path = Path(path)
@@ -138,20 +143,20 @@ def stitch_svgs_vertical(svgs: Sequence[str]) -> str:
     for svg, (w, h) in zip(svgs, dims):
         inner = ET.fromstring(_strip_preamble(svg))
         inner.set("x", "0")
-        inner.set("y", str(y))
-        inner.set("width", str(w))
-        inner.set("height", str(h))
+        inner.set("y", _fmt_dim(y))
+        inner.set("width", _fmt_dim(w))
+        inner.set("height", _fmt_dim(h))
         # Force viewBox so nested coordinate system matches input.
         if inner.get("viewBox") is None:
-            inner.set("viewBox", f"0 0 {w} {h}")
+            inner.set("viewBox", f"0 0 {_fmt_dim(w)} {_fmt_dim(h)}")
         children.append(ET.tostring(inner, encoding="unicode"))
         y += h
 
     body = "".join(children)
     return (
         f'<svg xmlns="{SVG_NS}" '
-        f'viewBox="0 0 {total_w} {total_h}" '
-        f'width="{total_w}" height="{total_h}">{body}</svg>'
+        f'viewBox="0 0 {_fmt_dim(total_w)} {_fmt_dim(total_h)}" '
+        f'width="{_fmt_dim(total_w)}" height="{_fmt_dim(total_h)}">{body}</svg>'
     )
 
 
