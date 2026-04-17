@@ -1,0 +1,15 @@
+# Render artifacts
+tests/output/
+*.tmp.svg
+*.tmp.png
+
+# Plugin state (per-machine)
+.kroki-plugin-state/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS
+.DS_Store
