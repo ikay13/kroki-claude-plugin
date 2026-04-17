@@ -11,8 +11,4 @@ entity counter is
     enable : in  std_logic;
     count  : out std_logic_vector(WIDTH-1 downto 0)
   );
-end entity counter;
-
-architecture rtl of counter is
-begin
-end architecture rtl;
+end counter;
