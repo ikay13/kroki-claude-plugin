@@ -1,54 +1,68 @@
 #!/usr/bin/env bash
 # render.sh — Render diagram source to SVG via Kroki CLI.
 #
-# Usage: render.sh <source_file> [--type <type>] [--format <fmt>] [--out <dir>]
+# Usage:
+#   render.sh <source_file> [--type <type>] [--format <fmt>] [--out <dir>]
+#                           [--mode dual|light|dark|single]
+#
+# Modes:
+#   dual   (default) — emit <name>.light.svg and <name>.dark.svg
+#   light            — emit <name>.light.svg only
+#   dark             — emit <name>.dark.svg only
+#   single           — emit <name>.svg (no suffix; Plan 1 backward-compat)
 #
 # Defaults:
-#   --type: inferred from file extension
+#   --type:   inferred from file extension (see alias map below)
 #   --format: svg
-#   --out: directory of source file
-#
-# Behavior:
-#   1. Check pod health (auto-start if needed)
-#   2. Render via kroki CLI to temp file
-#   3. Atomic move to final path
-#   4. Save source alongside render if source is stdin/pipe
+#   --out:    directory of source file
+#   --mode:   dual
 #
 # Exit codes:
 #   0 — render succeeded
-#   1 — pod unhealthy (after recovery attempts)
-#   2 — render failed (syntax error, timeout, etc.)
+#   1 — pod unhealthy
+#   2 — render failed (syntax, timeout, empty output)
 #   3 — usage error
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 KROKI_CLI="${KROKI_CLI:-$HOME/go/bin/kroki}"
 STATE_DIR="${KROKI_STATE_DIR:-$HOME/.kroki-plugin}"
 LAST_USE_FILE="$STATE_DIR/.last-use"
+PY_UTIL="$REPO_ROOT/lib/kroki_util.py"
 
 usage() {
-    echo "Usage: render.sh <source_file> [--type <type>] [--format <fmt>] [--out <dir>]"
-    echo ""
-    echo "Options:"
-    echo "  --type    Diagram type (plantuml, mermaid, graphviz, d2, etc.)"
-    echo "            Default: inferred from file extension"
-    echo "  --format  Output format (svg, png, pdf). Default: svg"
-    echo "  --out     Output directory. Default: same as source file"
+    cat <<EOF
+Usage: render.sh <source_file> [--type <type>] [--format <fmt>] [--out <dir>]
+                               [--mode dual|light|dark|single]
+
+Options:
+  --type    Diagram type (plantuml, mermaid, graphviz, d2, ...).
+            Default: inferred from file extension.
+  --format  Output format (svg, png, pdf). Default: svg.
+  --out     Output directory. Default: same as source file.
+  --mode    Render mode. Default: dual.
+              dual   -> <name>.light.svg + <name>.dark.svg
+              light  -> <name>.light.svg
+              dark   -> <name>.dark.svg
+              single -> <name>.svg (Plan 1 backward-compat)
+EOF
     exit 3
 }
 
-# Parse args
 SOURCE=""
 DIAGRAM_TYPE=""
 OUTPUT_FORMAT="svg"
 OUTPUT_DIR=""
+MODE="dual"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --type)   DIAGRAM_TYPE="$2"; shift 2 ;;
         --format) OUTPUT_FORMAT="$2"; shift 2 ;;
         --out)    OUTPUT_DIR="$2"; shift 2 ;;
+        --mode)   MODE="$2"; shift 2 ;;
         --help|-h) usage ;;
         -*)       echo "Unknown option: $1" >&2; usage ;;
         *)        SOURCE="$1"; shift ;;
@@ -59,13 +73,16 @@ if [[ -z "$SOURCE" ]]; then
     echo "Error: source file required." >&2
     usage
 fi
-
 if [[ ! -f "$SOURCE" ]]; then
     echo "Error: source file not found: $SOURCE" >&2
     exit 3
 fi
 
-# Derive output path
+case "$MODE" in
+    dual|light|dark|single) ;;
+    *) echo "Error: invalid --mode '$MODE' (dual|light|dark|single)" >&2; exit 3 ;;
+esac
+
 SOURCE_BASE="$(basename "$SOURCE")"
 SOURCE_NAME="${SOURCE_BASE%.*}"
 SOURCE_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
@@ -75,21 +92,13 @@ if [[ -z "$OUTPUT_DIR" ]]; then
 fi
 mkdir -p "$OUTPUT_DIR"
 
-OUTPUT_FILE="$OUTPUT_DIR/${SOURCE_NAME}.${OUTPUT_FORMAT}"
-TEMP_FILE="${OUTPUT_FILE}.tmp"
-
-# Step 1: Pod health check
 "$SCRIPT_DIR/pod-health.sh" || {
     echo "Error: Kroki pod is not healthy. Cannot render." >&2
     exit 1
 }
 
-# Touch last-use for watchdog
 mkdir -p "$STATE_DIR"
 date +%s > "$LAST_USE_FILE"
-
-# Step 2: Build kroki CLI args
-KROKI_ARGS=("convert" "$SOURCE" "--format" "$OUTPUT_FORMAT" "--out-file" "$TEMP_FILE")
 
 # Infer diagram type from extension when not explicitly provided.
 # The kroki CLI does not recognise all common aliases (.mmd, .puml, .pu, etc.)
@@ -115,28 +124,69 @@ if [[ -z "$DIAGRAM_TYPE" ]]; then
     esac
 fi
 
+# Render base SVG to a scratch path.
+BASE_TMP="$(mktemp --suffix=".svg")"
+KROKI_ARGS=("convert" "$SOURCE" "--format" "$OUTPUT_FORMAT" "--out-file" "$BASE_TMP")
 if [[ -n "$DIAGRAM_TYPE" ]]; then
     KROKI_ARGS+=("--type" "$DIAGRAM_TYPE")
 fi
 
-# Step 3: Render to temp file (atomic write pattern)
 KROKI_STDERR="$(mktemp)"
 if ! "$KROKI_CLI" "${KROKI_ARGS[@]}" 2>"$KROKI_STDERR"; then
     cat "$KROKI_STDERR" >&2
-    rm -f "$KROKI_STDERR" "$TEMP_FILE"
+    rm -f "$KROKI_STDERR" "$BASE_TMP"
     echo "Error: Kroki render failed for $SOURCE" >&2
     exit 2
 fi
 rm -f "$KROKI_STDERR"
 
-# Step 4: Verify output
-if [[ ! -s "$TEMP_FILE" ]]; then
+if [[ ! -s "$BASE_TMP" ]]; then
     echo "Error: Render produced empty output for $SOURCE" >&2
-    rm -f "$TEMP_FILE"
+    rm -f "$BASE_TMP"
     exit 2
 fi
 
-# Step 5: Atomic move
-mv "$TEMP_FILE" "$OUTPUT_FILE"
+# Resolve output paths for the requested mode(s).
+emit_light=0
+emit_dark=0
+emit_single=0
+case "$MODE" in
+    dual)   emit_light=1; emit_dark=1 ;;
+    light)  emit_light=1 ;;
+    dark)   emit_dark=1 ;;
+    single) emit_single=1 ;;
+esac
 
-echo "$OUTPUT_FILE"
+written=()
+
+if (( emit_single == 1 )); then
+    OUT="$OUTPUT_DIR/${SOURCE_NAME}.${OUTPUT_FORMAT}"
+    mv "$BASE_TMP" "$OUT"
+    written+=("$OUT")
+fi
+
+if (( emit_light == 1 )); then
+    OUT="$OUTPUT_DIR/${SOURCE_NAME}.light.${OUTPUT_FORMAT}"
+    if (( emit_dark == 1 )); then
+        cp "$BASE_TMP" "$OUT"
+    else
+        mv "$BASE_TMP" "$OUT"
+    fi
+    written+=("$OUT")
+fi
+
+if (( emit_dark == 1 )); then
+    OUT="$OUTPUT_DIR/${SOURCE_NAME}.dark.${OUTPUT_FORMAT}"
+    if ! python3 "$PY_UTIL" --op dark-remap --in "$BASE_TMP" --out "$OUT"; then
+        echo "Error: dark-remap failed for $SOURCE" >&2
+        rm -f "$BASE_TMP"
+        exit 2
+    fi
+    written+=("$OUT")
+fi
+
+rm -f "$BASE_TMP"
+
+for p in "${written[@]}"; do
+    echo "$p"
+done
