@@ -1,0 +1,4 @@
+seqdiag {
+  browser -> server [label = "GET /"];
+  browser <-- server;
+}

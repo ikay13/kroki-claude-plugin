@@ -1,0 +1,6 @@
+{
+  8U;
+  1: Switch [1U];
+  2: Server A [2U];
+  4: Server B [2U];
+}

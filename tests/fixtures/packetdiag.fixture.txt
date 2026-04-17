@@ -1,0 +1,7 @@
+{
+  colwidth = 16
+  0-3: Ver
+  4-7: HLen
+  8-15: ToS
+  16-31: Length
+}
