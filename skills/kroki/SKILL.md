@@ -36,7 +36,7 @@ The script handles:
 
 ### Choosing the Diagram Language
 
-See [references/languages/](references/languages/) for per-language syntax guides. For quick selection:
+See [references/languages/](references/languages/) for per-language syntax guides — 29 languages now supported. For quick selection:
 
 | Situation | Language | Kroki type |
 |-----------|----------|-----------|
@@ -46,7 +46,7 @@ See [references/languages/](references/languages/) for per-language syntax guide
 | Flowchart / decision logic | Mermaid | `mermaid` |
 | Modern architecture | D2 | `d2` |
 
-Full recommendation matrix in `kroki-help/references/recommendation-matrix.md`.
+For any other situation, or when you're unsure, hand off to the **`kroki-help`** skill — it owns the full 31-row recommendation matrix at `../kroki-help/references/recommendation-matrix.md`. The kroki-help skill is also the right place for questions about the kroki CLI, Niolesk GUI, kroki4tcl wrappers, and pod management.
 
 ### Source File Conventions
 
