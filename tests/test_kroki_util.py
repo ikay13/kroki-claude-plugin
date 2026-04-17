@@ -147,3 +147,90 @@ def test_inject_caption_adds_text_and_expands_viewbox() -> None:
     assert w == 100.0
     # Height grows by the caption strip (24px by convention).
     assert h > 50.0
+
+
+from lib.kroki_util import (
+    OKABE_ITO_PALETTE,
+    contrast_ratio,
+    wcag_aa_pass,
+    extract_hex_colors,
+    palette_violations,
+    grayscale_collisions,
+    colorblind_sim,
+)
+
+
+class TestContrastRatio:
+    def test_black_on_white_is_21(self):
+        assert abs(contrast_ratio("#000000", "#FFFFFF") - 21.0) < 0.01
+
+    def test_white_on_white_is_1(self):
+        assert abs(contrast_ratio("#FFFFFF", "#FFFFFF") - 1.0) < 0.01
+
+    def test_symmetric(self):
+        a = contrast_ratio("#1F1F1F", "#F7F7F7")
+        b = contrast_ratio("#F7F7F7", "#1F1F1F")
+        assert abs(a - b) < 0.01
+
+
+class TestWcagAaPass:
+    def test_normal_text_threshold_45(self):
+        # contrast_ratio("#767676", "#FFFFFF") ~= 4.54 -> pass
+        assert wcag_aa_pass("#767676", "#FFFFFF", large=False) is True
+        assert wcag_aa_pass("#777777", "#FFFFFF", large=False) is False
+
+    def test_large_text_threshold_30(self):
+        assert wcag_aa_pass("#949494", "#FFFFFF", large=True) is True
+
+
+class TestExtractHexColors:
+    def test_finds_fill_and_stroke(self):
+        svg = '<svg><rect fill="#FF0000" stroke="#00FF00"/></svg>'
+        assert extract_hex_colors(svg) == {"#FF0000", "#00FF00"}
+
+    def test_normalises_case(self):
+        svg = '<svg><rect fill="#ff0000"/></svg>'
+        assert "#FF0000" in extract_hex_colors(svg)
+
+    def test_finds_in_style_attribute(self):
+        svg = '<svg><rect style="fill:#123456;stroke:#abcdef"/></svg>'
+        assert extract_hex_colors(svg) == {"#123456", "#ABCDEF"}
+
+    def test_three_digit_hex_expanded(self):
+        svg = '<svg><rect fill="#f0f"/></svg>'
+        assert "#FF00FF" in extract_hex_colors(svg)
+
+
+class TestPaletteViolations:
+    def test_returns_non_palette_colors(self):
+        svg = '<svg><rect fill="#E69F00"/><rect fill="#123456"/></svg>'
+        assert palette_violations(svg, OKABE_ITO_PALETTE) == ["#123456"]
+
+    def test_empty_when_all_in_palette(self):
+        svg = '<svg><rect fill="#E69F00"/></svg>'
+        assert palette_violations(svg, OKABE_ITO_PALETTE) == []
+
+
+class TestGrayscaleCollisions:
+    def test_detects_colors_with_similar_luminance(self):
+        pairs = grayscale_collisions(["#777777", "#808080"], threshold=0.05)
+        assert ("#777777", "#808080") in pairs or ("#808080", "#777777") in pairs
+
+    def test_no_collision_for_black_and_white(self):
+        assert grayscale_collisions(["#000000", "#FFFFFF"], threshold=0.05) == []
+
+
+class TestColorblindSim:
+    def test_deuteranopia_transforms_red(self):
+        assert colorblind_sim("#FF0000", "deuteranopia") != "#FF0000"
+
+    def test_protanopia_transforms_green(self):
+        assert colorblind_sim("#00FF00", "protanopia") != "#00FF00"
+
+    def test_returns_hex_format(self):
+        result = colorblind_sim("#E69F00", "deuteranopia")
+        assert result.startswith("#") and len(result) == 7
+
+    def test_unknown_mode_raises(self):
+        with pytest.raises(ValueError):
+            colorblind_sim("#FF0000", "unknown-mode")

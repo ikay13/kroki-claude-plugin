@@ -226,6 +226,128 @@ def inject_caption(svg: str, caption: str) -> str:
     return stitch_svgs_vertical([svg, caption_svg])
 
 
+# ---------------------------------------------------------------------------
+# Accessibility helpers (advisory — called by a11y-check.sh)
+# ---------------------------------------------------------------------------
+
+OKABE_ITO_PALETTE: dict[str, str] = {
+    "ink": "#000000",
+    "orange": "#E69F00",
+    "sky": "#56B4E9",
+    "green": "#009E73",
+    "yellow": "#F0E442",
+    "blue": "#0072B2",
+    "vermilion": "#D55E00",
+    "pink": "#CC79A7",
+    "bg-light": "#F7F7F7",
+    "bg-dark": "#2B2B2B",
+    "muted": "#808080",
+    "emphasis": "#1F1F1F",
+    "subtle-stroke": "#CCCCCC",
+    "white": "#FFFFFF",
+}
+
+_HEX_ANY_RE = re.compile(r"#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})(?![0-9A-Fa-f])")
+
+
+def _hex_to_rgb(hex_: str) -> tuple[int, int, int]:
+    h = hex_.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _relative_luminance(hex_: str) -> float:
+    """WCAG relative luminance (sRGB -> linear -> weighted sum)."""
+
+    def chan(c: int) -> float:
+        cs = c / 255.0
+        return cs / 12.92 if cs <= 0.03928 else ((cs + 0.055) / 1.055) ** 2.4
+
+    r, g, b = _hex_to_rgb(hex_)
+    return 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b)
+
+
+def contrast_ratio(fg: str, bg: str) -> float:
+    """WCAG 2.1 contrast ratio: (L_lighter + 0.05) / (L_darker + 0.05). Range 1..21."""
+    l1 = _relative_luminance(fg)
+    l2 = _relative_luminance(bg)
+    lighter, darker = (l1, l2) if l1 > l2 else (l2, l1)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def wcag_aa_pass(fg: str, bg: str, *, large: bool = False) -> bool:
+    """WCAG AA pass: normal text >= 4.5:1; large text (18pt+ / 14pt+ bold) >= 3.0:1."""
+    threshold = 3.0 if large else 4.5
+    return contrast_ratio(fg, bg) >= threshold
+
+
+def extract_hex_colors(svg: str) -> set[str]:
+    """All hex colors in the SVG, normalised to uppercase 7-char (#RRGGBB)."""
+    out: set[str] = set()
+    for m in _HEX_ANY_RE.finditer(svg):
+        h = m.group(1)
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        out.add("#" + h.upper())
+    return out
+
+
+def palette_violations(svg: str, palette: dict[str, str]) -> list[str]:
+    """Hex colors in the SVG that are not in the palette. Sorted for stable output."""
+    allowed = {v.upper() for v in palette.values()}
+    return sorted(c for c in extract_hex_colors(svg) if c not in allowed)
+
+
+def grayscale_collisions(
+    colors: list[str], *, threshold: float = 0.05
+) -> list[tuple[str, str]]:
+    """Pairs of colors whose relative luminance differs by less than `threshold`."""
+    lums = [(c, _relative_luminance(c)) for c in colors]
+    out: list[tuple[str, str]] = []
+    for i in range(len(lums)):
+        for j in range(i + 1, len(lums)):
+            if abs(lums[i][1] - lums[j][1]) < threshold:
+                out.append((lums[i][0], lums[j][0]))
+    return out
+
+
+# Brettel/Vienot colorblind simulation matrices (sRGB approximation).
+_CB_MATRICES: dict[str, tuple[tuple[float, float, float], ...]] = {
+    "deuteranopia": (
+        (0.367, 0.861, -0.228),
+        (0.280, 0.673, 0.047),
+        (-0.012, 0.043, 0.969),
+    ),
+    "protanopia": (
+        (0.152, 1.053, -0.205),
+        (0.115, 0.786, 0.099),
+        (-0.004, -0.048, 1.052),
+    ),
+    "tritanopia": (
+        (1.256, -0.077, -0.179),
+        (-0.078, 0.931, 0.148),
+        (0.005, 0.691, 0.304),
+    ),
+}
+
+
+def colorblind_sim(hex_: str, mode: str) -> str:
+    """Approximate a colorblind person's perception of the given color.
+
+    Modes: deuteranopia, protanopia, tritanopia. Returns uppercase `#RRGGBB`.
+    """
+    if mode not in _CB_MATRICES:
+        raise ValueError(f"unknown colorblind mode: {mode}")
+    m = _CB_MATRICES[mode]
+    r, g, b = (c / 255.0 for c in _hex_to_rgb(hex_))
+    rr = m[0][0] * r + m[0][1] * g + m[0][2] * b
+    gg = m[1][0] * r + m[1][1] * g + m[1][2] * b
+    bb = m[2][0] * r + m[2][1] * g + m[2][2] * b
+    clamp = lambda v: max(0, min(255, int(round(v * 255))))
+    return "#{:02X}{:02X}{:02X}".format(clamp(rr), clamp(gg), clamp(bb))
+
+
 def _cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="kroki_util",
