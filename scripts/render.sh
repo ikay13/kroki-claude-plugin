@@ -33,6 +33,7 @@ LAST_USE_FILE="$STATE_DIR/.last-use"
 PY_UTIL="$REPO_ROOT/lib/kroki_util.py"
 
 usage() {
+    local code="${1:-3}"
     cat <<EOF
 Usage: render.sh <source_file> [--type <type>] [--format <fmt>] [--out <dir>]
                                [--mode dual|light|dark|single]
@@ -48,7 +49,7 @@ Options:
               dark   -> <name>.dark.svg
               single -> <name>.svg (Plan 1 backward-compat)
 EOF
-    exit 3
+    exit "$code"
 }
 
 SOURCE=""
@@ -63,7 +64,7 @@ while [[ $# -gt 0 ]]; do
         --format) OUTPUT_FORMAT="$2"; shift 2 ;;
         --out)    OUTPUT_DIR="$2"; shift 2 ;;
         --mode)   MODE="$2"; shift 2 ;;
-        --help|-h) usage ;;
+        --help|-h) usage 0 ;;
         -*)       echo "Unknown option: $1" >&2; usage ;;
         *)        SOURCE="$1"; shift ;;
     esac
@@ -126,6 +127,7 @@ fi
 
 # Render base SVG to a scratch path.
 BASE_TMP="$(mktemp --suffix=".svg")"
+trap 'rm -f "$BASE_TMP" "${KROKI_STDERR:-}"' EXIT INT TERM
 KROKI_ARGS=("convert" "$SOURCE" "--format" "$OUTPUT_FORMAT" "--out-file" "$BASE_TMP")
 if [[ -n "$DIAGRAM_TYPE" ]]; then
     KROKI_ARGS+=("--type" "$DIAGRAM_TYPE")
@@ -184,8 +186,6 @@ if (( emit_dark == 1 )); then
     fi
     written+=("$OUT")
 fi
-
-rm -f "$BASE_TMP"
 
 for p in "${written[@]}"; do
     echo "$p"

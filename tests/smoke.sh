@@ -17,6 +17,10 @@ PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RENDER="$PLUGIN_DIR/scripts/render.sh"
 FIXTURES_DIR="$PLUGIN_DIR/tests/fixtures"
 OUTPUT_DIR=$(mktemp -d /tmp/kroki-smoke-XXXXXX)
+INT_DIR=""
+shopt -s nullglob
+cleanup_smoke() { [[ -n "$OUTPUT_DIR" ]] && rm -rf "$OUTPUT_DIR"; [[ -n "$INT_DIR" ]] && rm -rf "$INT_DIR"; }
+trap cleanup_smoke EXIT INT TERM
 
 FULL_MODE=false
 if [[ "${1:-}" == "--full" ]]; then
@@ -93,7 +97,7 @@ run_fixture() {
             return
         fi
         local header
-        header=$(head -c 100 "$variant")
+        header=$(head -c 256 "$variant")
         if [[ "$header" != *"<svg"* ]] && [[ "$header" != *"<?xml"* ]]; then
             printf "  FAIL  %-20s (invalid SVG header: %s)\n" "$name" "$(basename "$variant")"
             ((++fail))
@@ -149,7 +153,6 @@ fi
 echo ""
 echo "=== Obsidian integration check ==="
 INT_DIR=$(mktemp -d /tmp/kroki-obsidian-it-XXXXXX)
-trap 'rm -rf "$INT_DIR"' EXIT
 
 INT_DIAGRAMS="$INT_DIR/diagrams"
 mkdir -p "$INT_DIAGRAMS"
@@ -217,9 +220,6 @@ fi
 
 echo ""
 echo "Results: $pass passed, $fail failed, $skip skipped ($total total)"
-
-# Cleanup
-rm -rf "$OUTPUT_DIR"
 
 if (( fail > 0 )); then
     exit 1
