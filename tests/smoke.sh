@@ -145,6 +145,76 @@ if command -v python3 >/dev/null 2>&1; then
     fi
 fi
 
+# Obsidian integration check (Plan 3)
+echo ""
+echo "=== Obsidian integration check ==="
+INT_DIR=$(mktemp -d /tmp/kroki-obsidian-it-XXXXXX)
+trap 'rm -rf "$INT_DIR"' EXIT
+
+INT_DIAGRAMS="$INT_DIR/diagrams"
+mkdir -p "$INT_DIAGRAMS"
+
+# Copy 2 core fixtures so they parse as valid diagram sources.
+cp "$FIXTURES_DIR/plantuml.fixture.txt" "$INT_DIAGRAMS/arch-demo-plantuml.puml"
+cp "$FIXTURES_DIR/d2.fixture.txt"       "$INT_DIAGRAMS/arch-demo-d2.d2"
+
+# Prepend a purpose comment so update-index.sh has something to extract.
+sed -i '1i '"'"' Demo PlantUML diagram for smoke test' "$INT_DIAGRAMS/arch-demo-plantuml.puml"
+sed -i '1i // Demo D2 diagram for smoke test'             "$INT_DIAGRAMS/arch-demo-d2.d2"
+
+INT_PASS=true
+if ! "$RENDER" "$INT_DIAGRAMS/arch-demo-plantuml.puml" --type plantuml --out "$INT_DIAGRAMS" >/dev/null 2>&1; then
+    echo "  FAIL  integration: render plantuml"
+    INT_PASS=false
+fi
+if ! "$RENDER" "$INT_DIAGRAMS/arch-demo-d2.d2" --type d2 --out "$INT_DIAGRAMS" >/dev/null 2>&1; then
+    echo "  FAIL  integration: render d2"
+    INT_PASS=false
+fi
+
+if ! "$PLUGIN_DIR/scripts/update-index.sh" "$INT_DIAGRAMS" >/dev/null 2>&1; then
+    echo "  FAIL  integration: update-index.sh"
+    INT_PASS=false
+fi
+
+if [[ ! -f "$INT_DIAGRAMS/INDEX.md" ]]; then
+    echo "  FAIL  integration: INDEX.md not created"
+    INT_PASS=false
+else
+    for name in arch-demo-plantuml arch-demo-d2; do
+        if ! grep -q "$name" "$INT_DIAGRAMS/INDEX.md"; then
+            echo "  FAIL  integration: $name missing from INDEX.md"
+            INT_PASS=false
+        fi
+    done
+fi
+
+echo "# Test" > "$INT_DIR/test.md"
+if ! "$PLUGIN_DIR/scripts/embed-in-md.sh" "$INT_DIR/test.md" "arch-demo-plantuml" --caption "Demo" >/dev/null 2>&1; then
+    echo "  FAIL  integration: embed-in-md.sh first call"
+    INT_PASS=false
+fi
+if ! grep -qF "[[arch-demo-plantuml.light.svg]]" "$INT_DIR/test.md"; then
+    echo "  FAIL  integration: light wikilink missing"
+    INT_PASS=false
+fi
+if ! grep -qF "Figure -- Demo" "$INT_DIR/test.md"; then
+    echo "  FAIL  integration: caption missing"
+    INT_PASS=false
+fi
+"$PLUGIN_DIR/scripts/embed-in-md.sh" "$INT_DIR/test.md" "arch-demo-plantuml" --caption "Demo" >/dev/null 2>&1 || true
+dup_count=$(grep -cF "[[arch-demo-plantuml.light.svg]]" "$INT_DIR/test.md" || echo 0)
+if [[ "$dup_count" -ne 1 ]]; then
+    echo "  FAIL  integration: embed not idempotent (count=$dup_count)"
+    INT_PASS=false
+fi
+
+if $INT_PASS; then
+    echo "  PASS  integration: render -> update-index -> embed"
+else
+    ((++fail))
+fi
+
 echo ""
 echo "Results: $pass passed, $fail failed, $skip skipped ($total total)"
 
