@@ -1,0 +1,21 @@
+workspace {
+  model {
+    user = person "User"
+    system = softwareSystem "My System" {
+      web = container "Web App"
+      api = container "API"
+      user -> web "Uses"
+      web -> api "Calls"
+    }
+  }
+  views {
+    systemContext system "Context" {
+      include *
+      autoLayout
+    }
+    container system "Containers" {
+      include *
+      autoLayout
+    }
+  }
+}
