@@ -252,3 +252,56 @@ class TestEmbedInMd:
             "embed-in-md.sh", str(tmp_path / "nope.md"), "arch-demo"
         )
         assert result.returncode == 3
+
+
+class TestInstallVaultTheme:
+    def test_copies_css_into_snippets_dir(self, tmp_path: Path) -> None:
+        vault = tmp_path / "Vault"
+        vault.mkdir()
+
+        result = run_script("install-vault-theme.sh", str(vault))
+
+        assert result.returncode == 0, result.stderr
+        target = vault / ".obsidian" / "snippets" / "kroki-theme.css"
+        assert target.exists()
+        content = target.read_text()
+        assert ".kroki-dual" in content
+        assert "display: none" in content
+
+    def test_creates_snippets_dir_if_absent(self, tmp_path: Path) -> None:
+        vault = tmp_path / "Vault"
+        vault.mkdir()
+
+        assert not (vault / ".obsidian").exists()
+
+        result = run_script("install-vault-theme.sh", str(vault))
+        assert result.returncode == 0, result.stderr
+        assert (vault / ".obsidian" / "snippets").is_dir()
+
+    def test_idempotent_when_content_matches(self, tmp_path: Path) -> None:
+        vault = tmp_path / "Vault"
+        vault.mkdir()
+
+        first = run_script("install-vault-theme.sh", str(vault))
+        assert first.returncode == 0
+
+        second = run_script("install-vault-theme.sh", str(vault))
+        assert second.returncode == 0
+        assert "already up-to-date" in second.stdout
+
+    def test_overwrites_stale_css(self, tmp_path: Path) -> None:
+        vault = tmp_path / "Vault"
+        snippets = vault / ".obsidian" / "snippets"
+        snippets.mkdir(parents=True)
+        (snippets / "kroki-theme.css").write_text("/* stale */\n")
+
+        result = run_script("install-vault-theme.sh", str(vault))
+
+        assert result.returncode == 0
+        content = (snippets / "kroki-theme.css").read_text()
+        assert ".kroki-dual" in content
+        assert "stale" not in content
+
+    def test_error_when_vault_missing(self, tmp_path: Path) -> None:
+        result = run_script("install-vault-theme.sh", str(tmp_path / "nope"))
+        assert result.returncode == 1
