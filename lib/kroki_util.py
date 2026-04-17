@@ -101,7 +101,7 @@ def flatten_css_vars(svg: str) -> str:
     return _CSS_VAR_RE.sub(lambda m: m.group(1), svg)
 
 
-_HEX6_RE = re.compile(r"#([0-9A-Fa-f]{6})")
+_HEX6_RE = re.compile(r"#([0-9A-Fa-f]{6})(?![0-9A-Fa-f])")
 
 
 def dark_remap(svg: str) -> str:
