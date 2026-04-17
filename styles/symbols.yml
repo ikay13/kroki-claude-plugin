@@ -1,0 +1,43 @@
+# Glyph vocabulary for diagram legends.
+# Each entry: glyph (string), meaning (1-line description), category.
+
+symbols:
+  - glyph: "→"
+    meaning: "Directed flow / data path"
+    category: flow
+  - glyph: "⇄"
+    meaning: "Bidirectional exchange"
+    category: flow
+  - glyph: "⇢"
+    meaning: "Optional / async flow"
+    category: flow
+  - glyph: "⊗"
+    meaning: "Termination / error"
+    category: state
+  - glyph: "○"
+    meaning: "Start state"
+    category: state
+  - glyph: "●"
+    meaning: "End state"
+    category: state
+  - glyph: "◆"
+    meaning: "Decision / branch"
+    category: structure
+  - glyph: "▣"
+    meaning: "Subsystem / composite"
+    category: structure
+  - glyph: "▢"
+    meaning: "Process / activity"
+    category: structure
+  - glyph: "☁"
+    meaning: "External system / network"
+    category: structure
+  - glyph: "⚙"
+    meaning: "Service / component"
+    category: structure
+  - glyph: "†"
+    meaning: "Deprecated / legacy"
+    category: annotation
+  - glyph: "★"
+    meaning: "Critical path / highlight"
+    category: annotation

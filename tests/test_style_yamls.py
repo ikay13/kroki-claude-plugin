@@ -21,3 +21,12 @@ def test_palette_yaml_loads_and_has_expected_keys():
     }
     for hex_ in data["okabe_ito"].values():
         assert hex_.startswith("#") and len(hex_) == 7
+
+
+def test_symbols_yaml_loads_and_has_glyph_and_meaning():
+    data = load("symbols.yml")
+    assert "symbols" in data
+    assert isinstance(data["symbols"], list)
+    for entry in data["symbols"]:
+        assert "glyph" in entry
+        assert "meaning" in entry
