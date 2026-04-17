@@ -17,8 +17,8 @@ The Kroki Go CLI lives at `~/go/bin/kroki`. It POSTs source to the running Kroki
 # Render to PDF
 ~/go/bin/kroki convert diagram.puml --format pdf --out-file diagram.pdf
 
-# Use a non-default endpoint
-~/go/bin/kroki convert diagram.puml --endpoint http://localhost:8000 --format svg --out-file diagram.svg
+# Use a non-default config file (endpoint, timeout, etc. live in YAML)
+~/go/bin/kroki convert diagram.puml -c /path/to/kroki.yml --format svg --out-file diagram.svg
 
 # Pipe source from stdin (use --type since there's no extension)
 echo '@startuml\nA -> B\n@enduml' | ~/go/bin/kroki convert - --type plantuml --format svg --out-file out.svg
@@ -28,10 +28,10 @@ echo '@startuml\nA -> B\n@enduml' | ~/go/bin/kroki convert - --type plantuml --f
 
 | Flag | Effect | Default |
 |------|--------|---------|
-| `--type <name>` | Diagram language (29 supported — see `skills/kroki/references/languages/`). | Inferred from file extension. |
-| `--format <fmt>` | Output format: `svg`, `png`, `pdf`, `jpeg`, `txt`. | `svg` |
-| `--out-file <path>` | Output destination. Use `-` for stdout. | Required for non-stdout. |
-| `--endpoint <url>` | Kroki gateway URL. | Reads `~/kroki.yml`, fallback `https://kroki.io`. |
+| `-t, --type <name>` | Diagram language. Gateway accepts ~29; CLI's `--help` lists 25 by name but extras (e.g. `dbml`, `wireviz`, `tikz`) work too. See `skills/kroki/references/languages/` for the full set. | Inferred from file extension. |
+| `-f, --format <fmt>` | Output format: `svg`, `png`, `pdf`, `jpeg`, `base64`. | Inferred from `--out-file` extension; otherwise `svg`. |
+| `-o, --out-file <path>` | Output destination. Use `-` for stdout. | Inferred from input path; required for stdin input. |
+| `-c, --config <file>` | YAML config (endpoint, timeout, headers). The standard config is `~/kroki.yml` and is read automatically — pass `-c` only to use a different file. There is NO `--endpoint` flag — endpoint is set via the config file. | `~/kroki.yml` (or `KROKI_CONFIG` env var). |
 | `--help` | Print full flag list. | — |
 
 ## Exit codes
@@ -69,7 +69,7 @@ For `.txt`, `.md`, or any extension not listed, you MUST pass `--type` explicitl
 
 ## Plugin wrapper vs raw CLI
 
-Prefer `~/kroki-claude-plugin/scripts/render.sh`. It runs `pod-health.sh` first, writes atomically (temp + mv), and surfaces useful errors. Use raw `~/go/bin/kroki` only when you need a flag the wrapper doesn't pass through (e.g., `--endpoint` to a non-default host).
+Prefer `~/kroki-claude-plugin/scripts/render.sh`. It runs `pod-health.sh` first, writes atomically (temp + mv), and surfaces useful errors. Use raw `~/go/bin/kroki` only when you need a flag the wrapper doesn't pass through (e.g., `-c` to point at a different config file, or to render against a different endpoint by writing a one-off config).
 
 ## Upstream docs
 
