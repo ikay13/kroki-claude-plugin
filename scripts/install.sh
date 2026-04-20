@@ -27,6 +27,7 @@ RULES_FILE="$HOME/.claude/rules/session-continuity.md"
 STATE_DIR="$HOME/.kroki-plugin"
 SKIP_SYSTEMD=false
 SKIP_SMOKE=false
+DO_UNINSTALL=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -35,10 +36,39 @@ while [[ $# -gt 0 ]]; do
         --state-dir)    STATE_DIR="$2"; shift 2 ;;
         --skip-systemd) SKIP_SYSTEMD=true; shift ;;
         --skip-smoke)   SKIP_SMOKE=true; shift ;;
+        --uninstall)    DO_UNINSTALL=true; shift ;;
         --help|-h)      sed -n '2,20p' "$0"; exit 0 ;;
         *)              echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
+
+# --uninstall flag: remove kroki-session INSTALLER block, exit.
+if $DO_UNINSTALL; then
+    NEW_MARKER_OPEN='<!-- INSTALLER: kroki-session -->'
+    NEW_MARKER_CLOSE='<!-- /INSTALLER: kroki-session -->'
+
+    echo "uninstall kroki-session from session-continuity.md"
+    echo "===================================================="
+
+    if [[ ! -f "$RULES_FILE" ]]; then
+        echo "  [skip] $RULES_FILE does not exist — nothing to uninstall"
+        exit 0
+    fi
+
+    if grep -qF "$NEW_MARKER_OPEN" "$RULES_FILE"; then
+        sed -i "\|$NEW_MARKER_OPEN|,\|$NEW_MARKER_CLOSE|d" "$RULES_FILE"
+        echo "  [ok]   removed kroki-session INSTALLER block"
+    else
+        echo "  [skip] kroki-session INSTALLER block not present"
+    fi
+
+    echo ""
+    echo "Note: '## diagrams' row in session-log-schema.md is NOT removed"
+    echo "      (persistent schema extension — see Plan 5a §5.4)."
+    echo "Note: state dir ~/.kroki-plugin/ is NOT removed."
+    echo "Note: plugin files are NOT removed."
+    exit 0
+fi
 
 [[ -d "$VAULT_ROOT" ]] || { echo "Error: vault root missing: $VAULT_ROOT" >&2; exit 1; }
 [[ -f "$RULES_FILE" ]] || { echo "Error: rules file missing: $RULES_FILE" >&2; exit 1; }

@@ -219,3 +219,110 @@ def test_install_fails_if_rules_file_lacks_extension_section(tmp_path):
         "Rules file must not be mutated when preflight fails"
     assert OLD_MARKER_OPEN not in body, \
         "Rules file must not be mutated when preflight fails"
+
+
+# ---------------------------------------------------------------------------
+# --uninstall flag tests
+# ---------------------------------------------------------------------------
+
+def fake_rules_with_new_marker(tmp: Path) -> Path:
+    """Rules file with the new kroki-session INSTALLER block already installed."""
+    f = tmp / "session-continuity-with-new.md"
+    f.write_text(
+        "# Rule: Session Continuity\n\n"
+        "At the end of every session involving project work:\n"
+        "1. Update `project_session_state.md`\n"
+        "2. Update the Obsidian tracker\n"
+        "3. Add a session log\n"
+        "4. Write a handoff document\n"
+        "\n"
+        "## Extension point: installer-appended instructions\n\n"
+        "Plugins and installers extend session-continuity behavior by appending\n"
+        "HTML-comment-bracketed blocks below this paragraph.\n"
+        "\n"
+        "<!-- INSTALLER: kroki-session -->\n"
+        "## Kroki session bookends\n"
+        "If the current session involves a project with a `diagrams/` directory:\n"
+        "Invoke session-start.sh and session-end.sh with --auto flag.\n"
+        "<!-- /INSTALLER: kroki-session -->\n"
+    )
+    return f
+
+
+def test_uninstall_removes_new_marker_block(tmp_path):
+    """--uninstall removes the kroki-session INSTALLER block from the rules file."""
+    rules = fake_rules_with_new_marker(tmp_path)
+    r = run("--rules-file", str(rules), "--uninstall")
+    assert r.returncode == 0, f"uninstall should exit 0; got: {r.stderr}"
+    body = rules.read_text()
+    assert NEW_MARKER_OPEN not in body, "new open marker should be removed"
+    assert NEW_MARKER_CLOSE not in body, "new close marker should be removed"
+    # But rest of the file should remain intact
+    assert "## Extension point:" in body, "Extension point section should remain"
+
+
+def test_uninstall_idempotent_when_marker_absent(tmp_path):
+    """--uninstall is idempotent: running when marker is already absent exits 0."""
+    rules = fake_rules(tmp_path)
+    # File has no kroki-session block
+    r = run("--rules-file", str(rules), "--uninstall")
+    assert r.returncode == 0, f"uninstall should exit 0 even when marker absent; got: {r.stderr}"
+    # File should be unchanged
+    original = rules.read_text()
+    assert NEW_MARKER_OPEN not in original, "marker should not be present"
+    assert OLD_MARKER_OPEN not in original, "old marker should not be present"
+
+
+def test_uninstall_rules_file_missing_is_noop(tmp_path):
+    """--uninstall exits 0 when rules file does not exist (idempotent no-op)."""
+    missing_rules = tmp_path / "nonexistent.md"
+    r = run("--rules-file", str(missing_rules), "--uninstall")
+    assert r.returncode == 0, "uninstall should exit 0 when rules file missing"
+    assert "[skip]" in r.stdout, "should log [skip] message"
+
+
+def test_uninstall_does_not_remove_diagram_schema(tmp_path):
+    """--uninstall removes only the INSTALLER block, not the ## diagrams schema row.
+    (Persistent schema extensions stay in place per Plan 5a §5.4)."""
+    rules_content = (
+        "# Rule: Session Continuity\n"
+        "## session-log-schema.md content\n"
+        "| Section | ... |\n"
+        "| `## diagrams` | ... |\n"
+        "\n"
+        "## Extension point: installer-appended instructions\n\n"
+        "<!-- INSTALLER: kroki-session -->\n"
+        "block content\n"
+        "<!-- /INSTALLER: kroki-session -->\n"
+    )
+    rules = tmp_path / "rules.md"
+    rules.write_text(rules_content)
+
+    r = run("--rules-file", str(rules), "--uninstall")
+    assert r.returncode == 0, f"uninstall failed: {r.stderr}"
+
+    body = rules.read_text()
+    assert NEW_MARKER_OPEN not in body, "INSTALLER block should be removed"
+    # Note: the test verifies the statement "schema row NOT removed" via presence check
+    assert "## diagrams" in body, \
+        "## diagrams schema row should NOT be removed (persistent by convention)"
+
+
+def test_uninstall_sed_delimiter_robustness(tmp_path):
+    """--uninstall uses | as sed delimiter (not /) to handle <!-- --> safely."""
+    rules_content = (
+        "# Rules\n"
+        "## Extension point\n"
+        "<!-- INSTALLER: kroki-session -->\n"
+        "If the project has a `diagrams/` directory:\n"
+        "invoke session-start.sh / session-end.sh\n"
+        "<!-- /INSTALLER: kroki-session -->\n"
+    )
+    rules = tmp_path / "rules.md"
+    rules.write_text(rules_content)
+
+    r = run("--rules-file", str(rules), "--uninstall")
+    assert r.returncode == 0, f"uninstall with / in content should succeed; got: {r.stderr}"
+    body = rules.read_text()
+    assert "<!-- INSTALLER: kroki-session -->" not in body, "marker block should be removed"
+    assert "## Extension point" in body, "rest of file should remain"
