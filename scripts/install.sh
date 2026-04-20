@@ -7,7 +7,7 @@
 #
 # Steps:
 #   1. Install kroki-theme.css into <vault-root>/.obsidian/snippets/
-#   2. Append step 5 to <rules-file> (session-continuity.md) if missing
+#   2. Append kroki extension block to <rules-file> inside Extension-point section (if missing)
 #   3. Create <state-dir> (default ~/.kroki-plugin)
 #   4. Install systemd user timers (skip if --skip-systemd or no systemctl)
 #   5. Run smoke test (skip if --skip-smoke)
@@ -54,17 +54,36 @@ echo ""
 echo "[1/5] Install CSS snippet..."
 "$SCRIPT_DIR/install-vault-theme.sh" "$VAULT_ROOT"
 
-# Step 2 — session-continuity.md step 5.
-STEP_MARKER="kroki-session"
-STEP_TEXT='5. If the project has a `diagrams/` directory, invoke `kroki-session(mode=end, project=<project>)` to snapshot diagram changes.'
+# Step 2 — session-continuity.md extension-point append.
+MARKER_OPEN='<!-- INSTALLER: kroki -->'
+MARKER_CLOSE='<!-- /INSTALLER: kroki -->'
+EXTENSION_SECTION='## Extension point: installer-appended instructions'
+
+INSTRUCTION_BLOCK=$(cat <<'BLOCK_EOF'
+
+<!-- INSTALLER: kroki -->
+If the project has a `diagrams/` directory, invoke `kroki-session(mode=end, project=<project>)` to snapshot diagram changes.
+<!-- /INSTALLER: kroki -->
+BLOCK_EOF
+)
 
 echo ""
-echo "[2/5] Patch session-continuity.md..."
-if grep -qF "$STEP_MARKER" "$RULES_FILE"; then
+echo "[2/5] Patch session-continuity.md (extension-point contract)..."
+
+# Preflight: session-continuity.md must have the Extension-point section
+if ! grep -qF "$EXTENSION_SECTION" "$RULES_FILE"; then
+    echo "Error: $RULES_FILE lacks the Extension point section." >&2
+    echo "Upgrade session-continuity.md to Knowledge-Architecture v1 schema." >&2
+    echo "See: ~/Documents/Obsidian Vault/Knowledge-Architecture/specs/2026-04-18-knowledge-architecture-design.md §6" >&2
+    exit 1
+fi
+
+# Idempotency: marker-based check
+if grep -qF "$MARKER_OPEN" "$RULES_FILE"; then
     echo "  already patched — skipping"
 else
-    printf '\n%s\n' "$STEP_TEXT" >> "$RULES_FILE"
-    echo "  appended step 5 to $RULES_FILE"
+    printf '%s\n' "$INSTRUCTION_BLOCK" >> "$RULES_FILE"
+    echo "  appended kroki extension block"
 fi
 
 # Step 3 — state dir.

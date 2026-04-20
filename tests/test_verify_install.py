@@ -15,7 +15,13 @@ def prepare(tmp_path: Path) -> dict:
     (vault / ".obsidian" / "snippets").mkdir(parents=True)
     (vault / ".obsidian" / "snippets" / "kroki-theme.css").write_text("body{}")
     rules = tmp_path / "rules.md"
-    rules.write_text("4. Write a handoff document\n5. ... kroki-session ...\n")
+    rules.write_text(
+        "4. Write a handoff document\n\n"
+        "## Extension point: installer-appended instructions\n\n"
+        "<!-- INSTALLER: kroki -->\n"
+        "If the project has a `diagrams/` directory, invoke `kroki-session(mode=end, project=<project>)` to snapshot diagram changes.\n"
+        "<!-- /INSTALLER: kroki -->\n"
+    )
     state = tmp_path / "state"
     state.mkdir()
     return {"vault": vault, "rules": rules, "state": state}

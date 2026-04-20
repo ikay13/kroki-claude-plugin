@@ -7,7 +7,7 @@
 #
 # 7 checks (per design spec §14):
 #   [1] CSS snippet exists in vault
-#   [2] session-continuity.md has step 5 (kroki-session reference)
+#   [2] session-continuity.md has kroki extension-point marker block
 #   [3] state dir exists
 #   [4] pod starts (skippable)
 #   [5] systemd timer loaded (skippable)
@@ -67,11 +67,11 @@ else
     check "CSS snippet installed" "$VAULT_ROOT/.obsidian/snippets/kroki-theme.css missing"
 fi
 
-# [2] session-continuity.md step 5.
-if grep -qF "kroki-session" "$RULES_FILE" 2>/dev/null; then
-    check "session-continuity.md step 5 present" ok
+# [2] session-continuity.md kroki extension-point marker.
+if grep -qF '<!-- INSTALLER: kroki -->' "$RULES_FILE" 2>/dev/null; then
+    check "session-continuity.md kroki extension-point marker present" ok
 else
-    check "session-continuity.md step 5 present" "no kroki-session line in $RULES_FILE"
+    check "session-continuity.md kroki extension-point marker present" "no <!-- INSTALLER: kroki --> marker in $RULES_FILE"
 fi
 
 # [3] state dir.

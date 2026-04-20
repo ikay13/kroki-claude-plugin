@@ -61,7 +61,7 @@ scripts/install.sh
 
 This:
 1. Installs `kroki-theme.css` into your vault's `.obsidian/snippets/` directory
-2. Appends step 5 to `~/.claude/rules/session-continuity.md` (if missing)
+2. Appends a kroki extension block to `~/.claude/rules/session-continuity.md` inside its `## Extension point: installer-appended instructions` section (if missing). Requires session-continuity.md with the Extension point section (Knowledge-Architecture v1 schema or later).
 3. Creates `~/.kroki-plugin/` state directory
 4. Installs systemd user timers (if systemd available)
 5. Runs a quick smoke test
