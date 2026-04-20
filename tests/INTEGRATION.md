@@ -132,6 +132,104 @@ unlocked once Plan 5 ships.
 - Legend composition failure is logged to stderr but does not block the render.
 - Exit code is 0 or 2 (acceptable — legend is optional). Design §13: "Legend composition fails — Degrade gracefully: save diagram without legend."
 
+## Scenario 9 — mode=start surfaces prior session's diagrams
+
+**Prereqs:** A project with diagrams + at least one prior session log containing a `## diagrams` section.
+
+1. `cd ~/kroki-claude-plugin`
+2. Run: `./scripts/session-start.sh --project Kroki-Plugin`
+3. Inspect stdout: should be a JSON object with keys `mode`, `project`, `vault_dir`, `loaded_diagrams`, `reference_summary`, `last_next_steps`.
+4. Inspect stderr: one line "kroki-session: surfaced N prior diagrams + M references".
+
+**Pass:** JSON validates, values reflect prior session content.
+
+---
+
+## Scenario 10 — mode=end with 3 modified sources
+
+**Prereqs:** Clean working tree in a kroki project. Pod running.
+
+1. Edit 3 diagram sources: e.g., modify `diagrams/seq-kroki-render-flow.puml`, add a new source `diagrams/trace-smoke.puml`, delete one.
+2. Create/ensure today's session log exists: `touch "$HOME/Documents/Obsidian Vault/Kroki-Plugin/sessions/$(date +%Y-%m-%d)-Kroki-Plugin-session-99.md"` with minimal schema-compliant content.
+3. Run: `./scripts/session-end.sh --project Kroki-Plugin`
+4. Inspect stderr summary: should report `rendered: 2/2`, `embeds: 2 added`, `milestone: none`, `exit: 0`.
+5. Open the session log in Obsidian: `## diagrams` section present with two dual-wikilink blocks.
+6. INDEX.md regenerated.
+
+**Pass:** both renders succeed, embed is idempotent (re-run produces no duplicates), INDEX.md reflects current state.
+
+---
+
+## Scenario 11 — mode=end with pod down
+
+**Prereqs:** Pod stopped. `cd ~/kroki/ && ./kroki.sh down`.
+
+1. Modify a diagram source.
+2. Run: `./scripts/session-end.sh --project Kroki-Plugin`
+3. Expected stderr: `kroki-session: pod preflight failed (rc=N); ...`
+4. Expected exit code: `2`.
+
+**Pass:** no spurious renders attempted, exit 2, clear environmental error message.
+
+---
+
+## Scenario 12 — Milestone auto-detect on `v1.0.0` tag
+
+**Prereqs:** Clean working tree.
+
+1. `git tag v1.0.0-test` (temporary; delete after)
+2. Run: `./scripts/session-end.sh --project Kroki-Plugin`
+3. Inspect summary: `milestone: "v1.0.0-test" (auto-detect, snapshot generated)`.
+4. Inspect `diagrams/milestones/`: `v1.0.0-test.light.svg`, `v1.0.0-test.dark.svg`, `v1.0.0-test.source-list.txt` exist.
+5. Re-run: second invocation should NOT regenerate (existence check skips).
+6. Create `diagrams/milestones/v1.0.0-test.skip`, delete the .svg files, re-run: should skip due to sentinel.
+7. `git tag -d v1.0.0-test` (cleanup).
+
+**Pass:** auto-detect fires once, sentinel suppresses, existence check prevents duplication.
+
+---
+
+## Scenario 13 — Activity gate + env var skip
+
+1. Export `KROKI_SESSION_AUTO=0` in shell.
+2. Run: `./scripts/session-start.sh --auto --project Kroki-Plugin`
+3. Expected: silent (no stdout, no stderr), exit 0.
+4. Run: `./scripts/session-start.sh --project Kroki-Plugin` (no --auto)
+5. Expected: proceeds normally (env var ignored).
+6. Unset: `unset KROKI_SESSION_AUTO`.
+
+**Pass:** --auto honors env var; explicit invocation ignores it.
+
+---
+
+## Scenario 14 — Session log missing at mode=end
+
+**Prereqs:** Project with diagrams, but no session log for today in `sessions/`.
+
+1. Modify a diagram source.
+2. Run: `./scripts/session-end.sh --project Kroki-Plugin`
+3. Inspect stderr: should contain "no session log found at mode=end — embed skipped. Ensure session-continuity workflow creates the log before kroki-session fires, then re-invoke."
+4. Inspect summary: `embeds: skipped (no session log present)`.
+5. No stub file created in `sessions/`.
+6. INDEX.md still regenerated.
+
+**Pass:** render + INDEX + memory update all proceed; embed step no-op; no stub.
+
+---
+
+## Scenario 15 — Migration from v0.9.0 `INSTALLER: kroki` marker
+
+**Prereqs:** Start from a `session-continuity.md` that has the old `<!-- INSTALLER: kroki -->` block but not the new `kroki-session` block.
+
+1. Copy `session-continuity.md` to a backup: `cp ~/.claude/rules/session-continuity.md /tmp/continuity.bak.md`.
+2. If already migrated, simulate the old state: `sed -i '/<!-- INSTALLER: kroki-session -->/,/<!-- \/INSTALLER: kroki-session -->/d' ~/.claude/rules/session-continuity.md && printf '\n<!-- INSTALLER: kroki -->\nlegacy placeholder\n<!-- /INSTALLER: kroki -->\n' >> ~/.claude/rules/session-continuity.md`.
+3. Run: `./scripts/install.sh` (full install).
+4. Verify: `grep -c "INSTALLER: kroki-session" ~/.claude/rules/session-continuity.md` → 2 (open + close).
+5. Verify: old marker removed: `grep "INSTALLER: kroki " ~/.claude/rules/session-continuity.md` → no output.
+6. Restore: `cp /tmp/continuity.bak.md ~/.claude/rules/session-continuity.md`.
+
+**Pass:** new marker present, old marker absent, no duplicate blocks.
+
 ## Pass criteria
 
 All scenarios except #3 must PASS before tagging a release. #3 stays marked
