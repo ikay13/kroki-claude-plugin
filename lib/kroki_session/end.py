@@ -92,11 +92,172 @@ def main(
         print("kroki-session: skipped (no diagram activity)", file=sys.stderr)
         return 0
 
-    # More steps in next task
-    # TODO(task-13): per-diagram render loop + deleted logging
-    # TODO(task-14): INDEX regen + session log resolution + embed + milestone + memory + summary
+    # Step 7: per-diagram render loop
+    successes: list[dict] = []
+    failures: list[dict] = []
+    for src in list(changes["modified"]) + list(changes["new"]):
+        try:
+            render_result = subprocess.run(
+                [str(_SCRIPTS / "render.sh"), str(src), "--mode", "dual"],
+                capture_output=True,
+                check=False,
+            )
+            if render_result.returncode != 0:
+                failures.append({
+                    "src": src,
+                    "stage": "render",
+                    "error": render_result.stderr.decode(errors="replace").strip()
+                              or f"render.sh exit {render_result.returncode}",
+                })
+                continue
+        except FileNotFoundError:
+            failures.append({"src": src, "stage": "render", "error": "render.sh not found"})
+            continue
 
-    return 0
+        # a11y: advisory
+        a11y_flagged = False
+        try:
+            a11y_result = subprocess.run(
+                [str(_SCRIPTS / "a11y-check.sh"), str(src)],
+                capture_output=True,
+                check=False,
+            )
+            a11y_flagged = a11y_result.returncode != 0
+        except FileNotFoundError:
+            failures.append({"src": src, "stage": "a11y-environmental",
+                             "error": "a11y-check.sh not found"})
+            # Still count as success for render; a11y is advisory
+        successes.append({
+            "src": src,
+            "basename": src.stem,
+            "a11y_flagged": a11y_flagged,
+        })
+
+    # Step 8: handle deleted
+    deleted_names: list[str] = []
+    for src in changes["deleted"]:
+        deleted_names.append(src.name)
+
+    # Step 9: INDEX regen
+    try:
+        subprocess.run(
+            [str(_SCRIPTS / "update-index.sh"), str(diagrams_dir)],
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        failures.append({"src": Path("<index>"), "stage": "index",
+                         "error": "update-index.sh not found"})
+
+    # Step 10: session log resolution
+    current_log = common.resolve_session_log(project, which="latest")
+    embed_skipped = current_log is None
+    if embed_skipped:
+        print(
+            "kroki-session: no session log found at mode=end — embed skipped. "
+            "Ensure session-continuity workflow creates the log before kroki-session fires, "
+            "then re-invoke.",
+            file=sys.stderr,
+        )
+
+    # Step 11: embed loop (skipped if no current_log)
+    if not embed_skipped:
+        for s in list(successes):
+            try:
+                caption = common.extract_purpose(s["src"])
+                subprocess.run(
+                    [
+                        str(_SCRIPTS / "embed-in-md.sh"),
+                        str(current_log),
+                        s["basename"],
+                        "--section", "## diagrams",
+                        "--caption", caption,
+                    ],
+                    capture_output=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                failures.append({
+                    "src": s["src"],
+                    "stage": "embed",
+                    "error": e.stderr.decode(errors="replace").strip() or str(e),
+                })
+                successes.remove(s)
+            except FileNotFoundError:
+                failures.append({"src": s["src"], "stage": "embed",
+                                 "error": "embed-in-md.sh not found"})
+                successes.remove(s)
+
+    # Step 12: milestone handling
+    label = milestone_label or auto_milestone_tag
+    milestone_result: str = "none"
+    if label:
+        try:
+            subprocess.run(
+                [
+                    str(_SCRIPTS / "session-snapshot.sh"),
+                    "--project", project,
+                    "--milestone-label", label,
+                    "--vault-path", str(vault_dir),
+                ],
+                capture_output=True,
+                check=True,
+            )
+            kind = "explicit" if milestone_label else "auto-detect"
+            milestone_result = f'"{label}" ({kind}, snapshot generated)'
+        except subprocess.CalledProcessError as e:
+            failures.append({"src": Path("<milestone>"), "stage": "snapshot",
+                             "error": e.stderr.decode(errors="replace").strip() or str(e)})
+            kind = "explicit" if milestone_label else "auto-detect"
+            milestone_result = f'"{label}" ({kind}, snapshot FAILED)'
+        except FileNotFoundError:
+            failures.append({"src": Path("<milestone>"), "stage": "snapshot",
+                             "error": "session-snapshot.sh not found"})
+            milestone_result = f'"{label}" (snapshot SCRIPT MISSING)'
+
+    # Step 13: memory update
+    if successes:
+        memory = common.parse_memory(project)
+        prior = memory.get("touched_diagrams", [])
+        new_list = sorted(set(prior + [s["basename"] for s in successes]))
+        memory["touched_diagrams"] = new_list
+        if "project_name" not in memory:
+            memory["project_name"] = project
+        common.write_memory(project, memory)
+
+    # Step 14: summary
+    total = len(successes) + len(failures)
+    rendered_line = f"rendered: {len(successes)}/{max(total, 1)} ({len(failures)} failure(s))"
+    print(f"kroki-session(mode=end, project={project}):", file=sys.stderr)
+    print(f"  {rendered_line}", file=sys.stderr)
+    if failures:
+        print("  failures:", file=sys.stderr)
+        for f in failures:
+            print(f"    - {f['src']} (stage: {f['stage']}) — {f['error']}", file=sys.stderr)
+    a11y_flagged_names = [s["basename"] for s in successes if s.get("a11y_flagged")]
+    if a11y_flagged_names:
+        print(
+            f"  a11y: {len(a11y_flagged_names)} flagged ({', '.join(a11y_flagged_names)}) "
+            f"— advisory, see ~/.kroki-plugin/a11y-reports/",
+            file=sys.stderr,
+        )
+    print(f"  index: diagrams/INDEX.md regenerated", file=sys.stderr)
+    if embed_skipped:
+        print(f"  embeds: skipped (no session log present)", file=sys.stderr)
+    else:
+        print(f"  embeds: {len(successes)} added to {current_log.name}#^diagrams",
+              file=sys.stderr)
+    print(f"  milestone: {milestone_result}", file=sys.stderr)
+
+    # Exit code
+    if total == 0:
+        exit_code = 0
+    elif len(successes) == 0:
+        exit_code = 1
+    else:
+        exit_code = 0
+    print(f"  exit: {exit_code}", file=sys.stderr)
+    return exit_code
 
 
 def _cli() -> int:

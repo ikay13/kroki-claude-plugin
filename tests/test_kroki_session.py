@@ -666,6 +666,71 @@ class TestEnd:
         assert rc == 0
         assert "no diagram activity" in out.err or "skipped" in out.err.lower()
 
+    def _add_and_commit_diagram(self, project_root, basename, content):
+        diag = project_root / "diagrams" / f"{basename}.puml"
+        diag.write_text(content)
+        subprocess.run(["git", "-C", str(project_root), "add", "diagrams/"], check=True)
+        subprocess.run(["git", "-C", str(project_root), "commit", "-q", "-m", f"add {basename}"], check=True)
+        return diag
+
+    def test_per_diagram_failure_isolated(self, end_env, monkeypatch, capsys):
+        """One source fails render, another succeeds; successes count incremented."""
+        from lib.kroki_session import end
+        pr = end_env["project_root"]
+        diag1 = self._add_and_commit_diagram(pr, "good", "' Good\n@startuml\nA\n@enduml\n")
+        diag2 = self._add_and_commit_diagram(pr, "bad", "' Bad\n@startuml\nB\n@enduml\n")
+
+        # Modify both
+        diag1.write_text("' Good (v2)\n@startuml\nA2\n@enduml\n")
+        diag2.write_text("' Bad (v2)\n@startuml\nSYNTAX ERROR\n@enduml\n")
+
+        calls: list[list[str]] = []
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            calls.append(list(str(c) for c in cmd))
+            if "pod-health.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if "render.sh" in cmd_str:
+                if "bad.puml" in cmd_str:
+                    return subprocess.CompletedProcess(cmd, 1, b"", b"syntax error")
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if "a11y-check.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if "update-index.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=pr)
+        out = capsys.readouterr()
+        # rc should be 0 — partial success is OK (1 of 2 rendered)
+        assert rc == 0
+        assert "1/2" in out.err or "rendered: 1" in out.err
+
+    def test_all_renders_fail_exits_one(self, end_env, monkeypatch):
+        from lib.kroki_session import end
+        pr = end_env["project_root"]
+        diag = self._add_and_commit_diagram(pr, "one", "' One\n@startuml\nA\n@enduml\n")
+        diag.write_text("' One (v2)\n@startuml\nBAD\n@enduml\n")
+
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "pod-health.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if "render.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 1, b"", b"render failed")
+            if "update-index.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=pr)
+        assert rc == 1
+
 
 class TestSnapshot:
     """milestone snapshot behaviors — snapshot.py"""
