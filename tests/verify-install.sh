@@ -5,14 +5,17 @@
 #   verify-install.sh [--vault-root PATH] [--rules-file PATH] [--state-dir PATH]
 #                     [--skip-systemd] [--skip-pod] [--skip-smoke]
 #
-# 7 checks (per design spec §14):
+# 10 checks (per design spec §14):
 #   [1] CSS snippet exists in vault
-#   [2] session-continuity.md has kroki extension-point marker block
+#   [2] session-continuity.md has kroki-session extension-point marker block (new)
 #   [3] state dir exists
 #   [4] pod starts (skippable)
 #   [5] systemd timer loaded (skippable)
 #   [6] smoke test passes (skippable)
 #   [7] repo scripts are executable
+#   [8] old v0.9.0 kroki marker absent (migration completed)
+#   [9] session-log-schema.md has ## diagrams row
+#   [10] kroki-session bash entrypoints executable
 #
 # Exit codes:
 #   0 — all checks passed
@@ -67,11 +70,11 @@ else
     check "CSS snippet installed" "$VAULT_ROOT/.obsidian/snippets/kroki-theme.css missing"
 fi
 
-# [2] session-continuity.md kroki extension-point marker.
-if grep -qF '<!-- INSTALLER: kroki -->' "$RULES_FILE" 2>/dev/null; then
-    check "session-continuity.md kroki extension-point marker present" ok
+# [2] session-continuity.md kroki-session extension-point marker (new).
+if grep -qF '<!-- INSTALLER: kroki-session -->' "$RULES_FILE" 2>/dev/null; then
+    check "session-continuity.md kroki-session marker present" ok
 else
-    check "session-continuity.md kroki extension-point marker present" "no <!-- INSTALLER: kroki --> marker in $RULES_FILE"
+    check "session-continuity.md kroki-session marker present" "no <!-- INSTALLER: kroki-session --> marker in $RULES_FILE"
 fi
 
 # [3] state dir.
@@ -119,6 +122,34 @@ if $EXECUTABLES_OK; then
     check "all scripts executable" ok
 else
     check "all scripts executable" "some scripts/*.sh missing +x"
+fi
+
+# [8] old v0.9.0 marker absent (migration completed).
+if grep -qF '<!-- INSTALLER: kroki -->' "$RULES_FILE" 2>/dev/null; then
+    check "old v0.9.0 marker absent (migration completed)" "<!-- INSTALLER: kroki --> still present in $RULES_FILE — migration failed"
+else
+    check "old v0.9.0 marker absent (migration completed)" ok
+fi
+
+# [9] session-log-schema.md has ## diagrams row.
+SCHEMA_FILE="${SCHEMA_FILE:-$HOME/.claude/rules/session-log-schema.md}"
+if grep -qE '^\| `## diagrams`' "$SCHEMA_FILE" 2>/dev/null; then
+    check "session-log-schema.md has ## diagrams row" ok
+else
+    check "session-log-schema.md has ## diagrams row" "no ## diagrams row in $SCHEMA_FILE"
+fi
+
+# [10] kroki-session bash entrypoints executable.
+ENTRYPOINTS_OK=true
+for s in "$REPO_ROOT"/scripts/session-start.sh \
+         "$REPO_ROOT"/scripts/session-end.sh \
+         "$REPO_ROOT"/scripts/session-snapshot.sh; do
+    [[ -x "$s" ]] || ENTRYPOINTS_OK=false
+done
+if $ENTRYPOINTS_OK; then
+    check "kroki-session entrypoints executable" ok
+else
+    check "kroki-session entrypoints executable" "one of session-{start,end,snapshot}.sh not executable"
 fi
 
 echo ""
