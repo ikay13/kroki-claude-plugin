@@ -54,16 +54,30 @@ echo ""
 echo "[1/5] Install CSS snippet..."
 "$SCRIPT_DIR/install-vault-theme.sh" "$VAULT_ROOT"
 
-# Step 2 — session-continuity.md extension-point append.
-MARKER_OPEN='<!-- INSTALLER: kroki -->'
-MARKER_CLOSE='<!-- /INSTALLER: kroki -->'
+# Step 2 — session-continuity.md extension-point append with v0.9.0 migration.
+OLD_MARKER_OPEN='<!-- INSTALLER: kroki -->'
+OLD_MARKER_CLOSE='<!-- /INSTALLER: kroki -->'
+NEW_MARKER_OPEN='<!-- INSTALLER: kroki-session -->'
+NEW_MARKER_CLOSE='<!-- /INSTALLER: kroki-session -->'
 EXTENSION_SECTION='## Extension point: installer-appended instructions'
 
 INSTRUCTION_BLOCK=$(cat <<'BLOCK_EOF'
 
-<!-- INSTALLER: kroki -->
-If the project has a `diagrams/` directory, invoke `kroki-session(mode=end, project=<project>)` to snapshot diagram changes.
-<!-- /INSTALLER: kroki -->
+<!-- INSTALLER: kroki-session -->
+## Kroki session bookends
+
+If the current session involves a project with a `diagrams/` directory in its vault folder:
+
+**At session start** (after reading memory per §"At the start of every session"):
+Invoke `~/kroki-claude-plugin/scripts/session-start.sh --auto --project <project>`. Use the returned JSON payload (on stdout) to surface prior diagram inventory to the user.
+
+**At session end** (after steps 1–4 of end-of-session sequence, before generating the resume prompt):
+Invoke `~/kroki-claude-plugin/scripts/session-end.sh --auto --project <project>`. If a `v*` semver tag was placed on HEAD during this session and no milestone snapshot exists, auto-capture it. If the user named a milestone explicitly during the session (e.g., "snapshot as release-alpha"), pass `--milestone-label <label>` instead — and omit `--auto` so it is treated as an explicit invocation. Report the summary payload (stderr) in the session's close-out.
+
+For multi-project sessions: run mode=end once per project touched, serially.
+
+**Auto-invoke suppression:** both start and end auto-invocations respect `KROKI_SESSION_AUTO=0` — when the environment variable is set, the `--auto`-flagged invocations exit silently. Explicit user-triggered invocations (without `--auto`) run regardless of the env var.
+<!-- /INSTALLER: kroki-session -->
 BLOCK_EOF
 )
 
@@ -78,12 +92,20 @@ if ! grep -qF "$EXTENSION_SECTION" "$RULES_FILE"; then
     exit 1
 fi
 
-# Idempotency: marker-based check
-if grep -qF "$MARKER_OPEN" "$RULES_FILE"; then
-    echo "  already patched — skipping"
+# Idempotency + migration:
+# - If new marker present → no-op.
+# - Else if old marker present → migrate (delete old block, append new).
+# - Else → append fresh.
+if grep -qF "$NEW_MARKER_OPEN" "$RULES_FILE"; then
+    echo "  already migrated — skipping"
+elif grep -qF "$OLD_MARKER_OPEN" "$RULES_FILE"; then
+    # Delete old block via sed, then append new
+    sed -i "\|$OLD_MARKER_OPEN|,\|$OLD_MARKER_CLOSE|d" "$RULES_FILE"
+    printf '%s\n' "$INSTRUCTION_BLOCK" >> "$RULES_FILE"
+    echo "  migrated kroki → kroki-session block"
 else
     printf '%s\n' "$INSTRUCTION_BLOCK" >> "$RULES_FILE"
-    echo "  appended kroki extension block"
+    echo "  appended kroki-session block"
 fi
 
 # Step 3 — state dir.
