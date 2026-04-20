@@ -577,6 +577,33 @@ class TestEnd:
         assert out.out == ""
         assert out.err == ""
 
+    def test_pod_preflight_failure_exits_two(self, end_env, monkeypatch, capsys):
+        """pod-health.sh non-zero → exit 2."""
+        from lib.kroki_session import end
+
+        def fake_run(cmd, **kwargs):
+            if "pod-health.sh" in str(cmd):
+                return subprocess.CompletedProcess(cmd, returncode=1, stdout=b"", stderr=b"pod down")
+            return subprocess.run(cmd, **kwargs)  # passthrough
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=end_env["project_root"])
+        assert rc == 2
+        out = capsys.readouterr()
+        assert "pod" in out.err.lower()
+
+    def test_pod_preflight_success_continues(self, end_env, monkeypatch):
+        from lib.kroki_session import end
+
+        def fake_run(cmd, **kwargs):
+            if "pod-health.sh" in str(cmd):
+                return subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=b"")
+            return subprocess.run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=end_env["project_root"])
+        assert rc == 0  # clean vault with no diagram work → exit 0
+
 
 class TestSnapshot:
     """milestone snapshot behaviors — snapshot.py"""

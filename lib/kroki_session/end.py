@@ -32,8 +32,25 @@ def main(
         print(f"kroki-session: {e}", file=sys.stderr)
         return 1
 
+    # Step 3: pod preflight
+    try:
+        ph = subprocess.run(
+            [str(_SCRIPTS / "pod-health.sh")],
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        print("kroki-session: pod-health.sh not found", file=sys.stderr)
+        return 2
+    if ph.returncode != 0:
+        print(
+            f"kroki-session: pod preflight failed (rc={ph.returncode}); "
+            f"stderr: {ph.stderr.decode(errors='replace').strip()}",
+            file=sys.stderr,
+        )
+        return 2
+
     # More steps to be added in subsequent tasks
-    # TODO(task-11): pod preflight
     # TODO(task-12): git state + diff detection
     # TODO(task-13): per-diagram render loop
     # TODO(task-14): embed + index + memory + milestone
