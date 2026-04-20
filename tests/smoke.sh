@@ -137,6 +137,83 @@ else
     done
 fi
 
+# Kroki-session round-trip (only in --full mode).
+if $FULL_MODE; then
+    echo ""
+    echo "=== kroki-session round-trip (synthetic vault) ==="
+    ROUND_TRIP_DIR=$(mktemp -d)
+    trap "rm -rf $ROUND_TRIP_DIR" EXIT
+    ROUND_TRIP_PROJECT="$ROUND_TRIP_DIR/TestProject"
+    mkdir -p "$ROUND_TRIP_PROJECT/diagrams" "$ROUND_TRIP_PROJECT/sessions"
+    cd "$ROUND_TRIP_PROJECT"
+    git init -q -b main
+    git config user.email "smoke@test"
+    git config user.name "Smoke"
+
+    # Create initial commit with one diagram
+    cat > diagrams/arch-smoke.puml <<'PUML'
+' Smoke test: minimal PlantUML
+@startuml
+A -> B: hello
+@enduml
+PUML
+    git add .
+    git commit -q -m "initial"
+
+    # Create a session log for embed target
+    cat > sessions/2026-04-20-TestProject-session-00.md <<'MD'
+---
+project: TestProject
+session_nn: 0
+date: 2026-04-20
+profile: [se-project]
+status: active
+session_goal: smoke test
+---
+
+# Session 00 — 2026-04-20: smoke
+
+## what-was-done
+
+smoke test
+
+## next-steps
+
+- none
+MD
+
+    # Now modify the diagram (creates a changed file)
+    cat > diagrams/arch-smoke.puml <<'PUML'
+' Smoke test: minimal PlantUML
+@startuml
+A -> C: modified
+@enduml
+PUML
+
+    # Run mode=end
+    cd "$PLUGIN_DIR"
+    if ./scripts/session-end.sh --project TestProject --vault-path "$ROUND_TRIP_PROJECT" >/dev/null 2>&1; then
+        # Verify: SVG outputs were created
+        if [[ -s "$ROUND_TRIP_PROJECT/diagrams/arch-smoke.light.svg" ]] && [[ -s "$ROUND_TRIP_PROJECT/diagrams/arch-smoke.dark.svg" ]]; then
+            echo "  [OK]  kroki-session round-trip: SVG files rendered"
+        else
+            echo "  [FAIL] kroki-session round-trip: SVG files not rendered"
+            exit 1
+        fi
+        # Verify: INDEX.md was regenerated
+        if [[ -s "$ROUND_TRIP_PROJECT/diagrams/INDEX.md" ]]; then
+            echo "  [OK]  kroki-session round-trip: INDEX.md regenerated"
+        else
+            echo "  [FAIL] kroki-session round-trip: INDEX.md not generated"
+            exit 1
+        fi
+    else
+        echo "  [FAIL] kroki-session round-trip: session-end.sh failed"
+        exit 1
+    fi
+    cd "$PLUGIN_DIR"
+fi
+
 # Python unit tests (Plan 2)
 if command -v python3 >/dev/null 2>&1; then
     echo ""
