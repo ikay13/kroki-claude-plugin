@@ -264,3 +264,99 @@ def write_memory(project: str, data: dict) -> None:
         out.append("")
 
     atomic_write(path, "\n".join(out))
+
+
+def _run_git(*args: str, cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess:
+    """Helper: run a git command, capture stdout/stderr, return CompletedProcess."""
+    return subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd) if cwd else None,
+        check=check,
+    )
+
+
+def git_state_check(cwd: Path | None = None) -> GitState:
+    """Detect the current git state for mode=end preflight.
+
+    Order of checks:
+    1. git binary present (else NO_GIT)
+    2. Inside a working tree (else NO_REPO)
+    3. Merge in progress (.git/MERGE_HEAD exists) → MERGE
+    4. Detached HEAD (git symbolic-ref HEAD fails) → DETACHED
+    5. Otherwise → OK
+    """
+    try:
+        v = _run_git("--version")
+    except FileNotFoundError:
+        return GitState.NO_GIT
+    if v.returncode != 0:
+        return GitState.NO_GIT
+
+    work_tree = _run_git("rev-parse", "--is-inside-work-tree", cwd=cwd)
+    if work_tree.returncode != 0 or work_tree.stdout.strip() != "true":
+        return GitState.NO_REPO
+
+    # Locate .git dir to check for MERGE_HEAD
+    git_dir_result = _run_git("rev-parse", "--git-dir", cwd=cwd)
+    if git_dir_result.returncode == 0:
+        git_dir = Path(git_dir_result.stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = (cwd or Path.cwd()) / git_dir
+        if (git_dir / "MERGE_HEAD").exists():
+            return GitState.MERGE
+
+    symref = _run_git("symbolic-ref", "--quiet", "HEAD", cwd=cwd)
+    if symref.returncode != 0:
+        return GitState.DETACHED
+
+    return GitState.OK
+
+
+def git_detect_changes(diagrams_dir: Path, cwd: Path | None = None) -> dict:
+    """Return modified/new/deleted source files under diagrams_dir per git.
+
+    Paths returned are absolute. Empty lists if none.
+    """
+    if cwd is None:
+        # Use the repo root containing diagrams_dir
+        rr = _run_git("rev-parse", "--show-toplevel", cwd=diagrams_dir)
+        if rr.returncode != 0:
+            return {"modified": [], "new": [], "deleted": []}
+        cwd = Path(rr.stdout.strip())
+
+    rel = diagrams_dir.resolve().relative_to(cwd.resolve())
+
+    # Modified (tracked, changed in working tree)
+    mod = _run_git("diff", "--name-only", "HEAD", "--", str(rel), cwd=cwd)
+    modified_rel = [Path(p) for p in mod.stdout.splitlines() if p.strip()]
+
+    # New (untracked)
+    new = _run_git("ls-files", "--others", "--exclude-standard", str(rel), cwd=cwd)
+    new_rel = [Path(p) for p in new.stdout.splitlines() if p.strip()]
+
+    # Deleted (tracked, removed from working tree)
+    deleted_output = _run_git("ls-files", "--deleted", str(rel), cwd=cwd)
+    deleted_rel = [Path(p) for p in deleted_output.stdout.splitlines() if p.strip()]
+
+    # git diff picks up deletes as well; filter them out of modified to avoid double-count
+    deleted_set = set(deleted_rel)
+    modified_rel = [p for p in modified_rel if p not in deleted_set]
+
+    return {
+        "modified": [cwd / p for p in modified_rel],
+        "new": [cwd / p for p in new_rel],
+        "deleted": [cwd / p for p in deleted_rel],
+    }
+
+
+def git_detect_tags_on_head(pattern: str = "v*", cwd: Path | None = None) -> list[str]:
+    """Return tags pointing at HEAD matching the glob pattern.
+
+    Default pattern 'v*' filters for semver-style release tags.
+    """
+    result = _run_git("tag", "--points-at", "HEAD", "--list", pattern, cwd=cwd)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]

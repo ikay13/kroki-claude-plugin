@@ -17,6 +17,16 @@ from lib.kroki_session.common import (
 )
 
 
+def _init_repo(path: Path) -> None:
+    """Initialize a git repo at path with initial commit. Helper for tests."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "test@test"], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "Test"], check=True)
+    (path / "README.md").write_text("# Test repo\n")
+    subprocess.run(["git", "-C", str(path), "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "initial"], check=True)
+
+
 class TestCommon:
     """Shared utility behaviors — common.py"""
 
@@ -182,6 +192,97 @@ class TestCommon:
         common.write_memory("My-Fancy Project", {"project_name": "My-Fancy Project",
                                                    "touched_diagrams": []})
         assert (memory_dir / "project_my_fancy_project.md").exists()
+
+    def test_git_state_check_ok(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert common.git_state_check() == GitState.OK
+
+    def test_git_state_check_detached(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        # Detach HEAD
+        sha = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "-C", str(tmp_path), "checkout", "-q", sha], check=True)
+        assert common.git_state_check() == GitState.DETACHED
+
+    def test_git_state_check_no_repo(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert common.git_state_check() == GitState.NO_REPO
+
+    def test_git_state_check_merge_in_progress(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        # Create conflicting branches
+        subprocess.run(["git", "-C", str(tmp_path), "checkout", "-q", "-b", "branch1"], check=True)
+        (tmp_path / "conflict.txt").write_text("branch1\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "conflict.txt"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "b1"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "checkout", "-q", "main"], check=True)
+        (tmp_path / "conflict.txt").write_text("main\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "conflict.txt"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "main"], check=True)
+        # Attempt merge (will conflict)
+        result = subprocess.run(["git", "-C", str(tmp_path), "merge", "branch1"],
+                                capture_output=True)
+        # merge should fail with conflict; MERGE_HEAD should exist
+        assert (tmp_path / ".git" / "MERGE_HEAD").exists()
+        assert common.git_state_check() == GitState.MERGE
+
+    def test_git_detect_changes_modified_new_deleted(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        diagrams = tmp_path / "diagrams"
+        diagrams.mkdir()
+        # Commit an initial diagram
+        (diagrams / "arch.puml").write_text("' Initial\n@startuml\nA\n@enduml\n")
+        (diagrams / "seq.puml").write_text("' Seq\n@startuml\nB\n@enduml\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "diagrams/"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "diagrams"], check=True)
+
+        # Modify one, add a new one, delete one
+        (diagrams / "arch.puml").write_text("' Modified\n@startuml\nA2\n@enduml\n")
+        (diagrams / "new-one.puml").write_text("' New\n@startuml\nC\n@enduml\n")
+        (diagrams / "seq.puml").unlink()
+
+        monkeypatch.chdir(tmp_path)
+        result = common.git_detect_changes(diagrams)
+        assert "arch.puml" in [p.name for p in result["modified"]]
+        assert "new-one.puml" in [p.name for p in result["new"]]
+        assert "seq.puml" in [p.name for p in result["deleted"]]
+
+    def test_git_detect_changes_empty_when_clean(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        diagrams = tmp_path / "diagrams"
+        diagrams.mkdir()
+        (diagrams / "a.puml").write_text("' test\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "diagrams/"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "c"], check=True)
+        monkeypatch.chdir(tmp_path)
+        result = common.git_detect_changes(diagrams)
+        assert result["modified"] == []
+        assert result["new"] == []
+        assert result["deleted"] == []
+
+    def test_git_detect_tags_on_head_semver_only(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        subprocess.run(["git", "-C", str(tmp_path), "tag", "v1.0.0"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "tag", "wip-backup"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "tag", "v2.0.0-rc1"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "tag", "last-good"], check=True)
+
+        result = common.git_detect_tags_on_head("v*")
+        assert "v1.0.0" in result
+        assert "v2.0.0-rc1" in result
+        assert "wip-backup" not in result
+        assert "last-good" not in result
+
+    def test_git_detect_tags_on_head_empty(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        result = common.git_detect_tags_on_head("v*")
+        assert result == []
 
 
 class TestStart:
