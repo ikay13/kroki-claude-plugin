@@ -899,3 +899,120 @@ class TestEnd:
 
 class TestSnapshot:
     """milestone snapshot behaviors — snapshot.py"""
+
+    def _small_svg(self, color: str = "red") -> bytes:
+        return f'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect fill="{color}"/></svg>'.encode()
+
+    @pytest.fixture
+    def snapshot_env(self, tmp_path, monkeypatch):
+        """Vault + memory scaffold for snapshot tests."""
+        pr = tmp_path / "Documents" / "Obsidian Vault" / "TestProject"
+        (pr / "diagrams").mkdir(parents=True)
+        (tmp_path / ".claude" / "projects" / "-home-orin" / "memory").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        return {"project_root": pr, "tmp_path": tmp_path}
+
+    def test_dual_theme_composite(self, snapshot_env, monkeypatch):
+        """Milestone produces <label>.light.svg + <label>.dark.svg + source-list.txt."""
+        from lib.kroki_session import snapshot
+        pr = snapshot_env["project_root"]
+        (pr / "diagrams" / "arch.puml").write_text("' arch\n@startuml\nA\n@enduml\n")
+        (pr / "diagrams" / "seq.puml").write_text("' seq\n@startuml\nB\n@enduml\n")
+
+        def fake_render(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "render.sh" in cmd_str:
+                # Simulate render.sh creating .light.svg + .dark.svg
+                for arg in cmd:
+                    if str(arg).endswith(".puml"):
+                        src = Path(str(arg))
+                        src.with_suffix(".light.svg").write_bytes(self._small_svg("red"))
+                        src.with_suffix(".dark.svg").write_bytes(self._small_svg("blue"))
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return subprocess.run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_render)
+        rc = snapshot.main(project="TestProject", milestone_label="v1.0.0",
+                           vault_path_override=pr)
+        assert rc == 0
+        milestones = pr / "diagrams" / "milestones"
+        assert (milestones / "v1.0.0.light.svg").exists()
+        assert (milestones / "v1.0.0.dark.svg").exists()
+        assert (milestones / "v1.0.0.source-list.txt").exists()
+        # Source list names both source files
+        source_list = (milestones / "v1.0.0.source-list.txt").read_text()
+        assert "arch.puml" in source_list
+        assert "seq.puml" in source_list
+
+    def test_source_list_audit_trail(self, snapshot_env, monkeypatch):
+        """source-list.txt records one basename per line."""
+        from lib.kroki_session import snapshot
+        pr = snapshot_env["project_root"]
+        (pr / "diagrams" / "a.puml").write_text("' a\n@startuml\nX\n@enduml\n")
+
+        def fake_render(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "render.sh" in cmd_str:
+                for arg in cmd:
+                    if str(arg).endswith(".puml"):
+                        src = Path(str(arg))
+                        src.with_suffix(".light.svg").write_bytes(self._small_svg())
+                        src.with_suffix(".dark.svg").write_bytes(self._small_svg())
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return subprocess.run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_render)
+        snapshot.main(project="TestProject", milestone_label="alpha", vault_path_override=pr)
+        text = (pr / "diagrams" / "milestones" / "alpha.source-list.txt").read_text()
+        lines = [l for l in text.splitlines() if l.strip()]
+        assert len(lines) == 1
+
+    def test_partial_render_fails_whole_snapshot(self, snapshot_env, monkeypatch):
+        """One source fails → overall snapshot fails (milestones are all-or-nothing)."""
+        from lib.kroki_session import snapshot
+        pr = snapshot_env["project_root"]
+        (pr / "diagrams" / "good.puml").write_text("' good\n@startuml\nG\n@enduml\n")
+        (pr / "diagrams" / "bad.puml").write_text("' bad\n@startuml\nBAD\n@enduml\n")
+
+        def fake_render(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "render.sh" in cmd_str and "bad.puml" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 1, b"", b"render failed")
+            if "render.sh" in cmd_str:
+                for arg in cmd:
+                    if str(arg).endswith(".puml"):
+                        src = Path(str(arg))
+                        src.with_suffix(".light.svg").write_bytes(self._small_svg())
+                        src.with_suffix(".dark.svg").write_bytes(self._small_svg())
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return subprocess.run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_render)
+        rc = snapshot.main(project="TestProject", milestone_label="v1.0.0",
+                           vault_path_override=pr)
+        assert rc == 1
+        # No partial output
+        assert not (pr / "diagrams" / "milestones" / "v1.0.0.light.svg").exists()
+
+    def test_milestones_index_row_added(self, snapshot_env, monkeypatch):
+        """milestones/INDEX.md gains one row per milestone."""
+        from lib.kroki_session import snapshot
+        pr = snapshot_env["project_root"]
+        (pr / "diagrams" / "arch.puml").write_text("' arch\n@startuml\nA\n@enduml\n")
+
+        def fake_render(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "render.sh" in cmd_str:
+                for arg in cmd:
+                    if str(arg).endswith(".puml"):
+                        src = Path(str(arg))
+                        src.with_suffix(".light.svg").write_bytes(self._small_svg())
+                        src.with_suffix(".dark.svg").write_bytes(self._small_svg())
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return subprocess.run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_render)
+        snapshot.main(project="TestProject", milestone_label="v0.1.0",
+                      vault_path_override=pr)
+        idx = (pr / "diagrams" / "milestones" / "INDEX.md").read_text()
+        assert "v0.1.0" in idx
