@@ -549,6 +549,34 @@ class TestStart:
 class TestEnd:
     """mode=end behaviors — end.py"""
 
+    @pytest.fixture
+    def end_env(self, tmp_path, monkeypatch):
+        """Synthetic git-initialized vault with diagrams/ subdir."""
+        project_root = tmp_path / "Documents" / "Obsidian Vault" / "TestProject"
+        _init_repo(project_root.parent.parent)  # init at HOME/Documents/Obsidian Vault
+        # Actually simpler: init in the project folder itself
+        return self._setup_project(tmp_path, monkeypatch)
+
+    def _setup_project(self, tmp_path, monkeypatch):
+        project_root = tmp_path / "Documents" / "Obsidian Vault" / "TestProject"
+        project_root.mkdir(parents=True)
+        _init_repo(project_root)
+        (project_root / "diagrams").mkdir()
+        (project_root / "sessions").mkdir()
+        (tmp_path / ".claude" / "projects" / "-home-orin" / "memory").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(project_root)
+        return {"project_root": project_root, "tmp_path": tmp_path}
+
+    def test_end_auto_flag_suppresses_when_env_var_set(self, end_env, monkeypatch, capsys):
+        from lib.kroki_session import end
+        monkeypatch.setenv("KROKI_SESSION_AUTO", "0")
+        rc = end.main(project="TestProject", auto=True, vault_path_override=end_env["project_root"])
+        out = capsys.readouterr()
+        assert rc == 0
+        assert out.out == ""
+        assert out.err == ""
+
 
 class TestSnapshot:
     """milestone snapshot behaviors — snapshot.py"""
