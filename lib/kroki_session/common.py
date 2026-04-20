@@ -31,3 +31,31 @@ class GitState(Enum):
     MERGE = "merge"
     NO_REPO = "no-repo"
     NO_GIT = "no-git"
+
+
+def vault_paths(project: str, override: Path | None = None) -> Path:
+    """Resolve the Obsidian vault folder for a project.
+
+    Convention: ~/Documents/Obsidian Vault/<project>/ (per obsidian-project-sync.md).
+    Override: if provided and exists, returned verbatim (bypasses convention).
+
+    Raises:
+        ProjectFolderNotFoundError: if override does not exist, or if convention
+            path does not exist. Error message names the bypass flag.
+    """
+    if override is not None:
+        if not override.is_dir():
+            raise ProjectFolderNotFoundError(
+                f"--vault-path override {override} does not exist or is not a directory"
+            )
+        return override
+
+    home = Path(os.environ.get("HOME", Path.home()))
+    path = home / "Documents" / "Obsidian Vault" / project
+    if not path.is_dir():
+        raise ProjectFolderNotFoundError(
+            f"Expected vault folder at {path} (per obsidian-project-sync.md naming rule). "
+            f"Not found. Fix: rename the vault folder to match project name '{project}' exactly. "
+            f"Bypass for this session: pass --vault-path /path/to/folder"
+        )
+    return path
