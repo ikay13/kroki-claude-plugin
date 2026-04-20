@@ -59,3 +59,36 @@ def vault_paths(project: str, override: Path | None = None) -> Path:
             f"Bypass for this session: pass --vault-path /path/to/folder"
         )
     return path
+
+
+def atomic_write(path: Path, content: str) -> None:
+    """Atomic file write via tmpfile + rename. POSIX-only (uses os.rename semantics)."""
+    tmp = path.with_suffix(path.suffix + ".kroki-tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
+
+
+# Matches the comment-stripping behavior of scripts/update-index.sh extract_purpose():
+# strips one leading comment token from: // # ' %% --
+_COMMENT_RE = re.compile(r"^\s*(?://|#|'|%%|--)\s*(.*?)\s*$")
+
+
+def extract_purpose(source_file: Path) -> str:
+    """Return the first comment line of a diagram source file, truncated to 120 chars.
+
+    Mirrors the bash implementation in scripts/update-index.sh. Recognizes comment tokens
+    //, #, ', %% , and --. Returns '' if no leading comment.
+    """
+    try:
+        with source_file.open("r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.rstrip("\n")
+                if not line.strip():
+                    continue  # skip blank lines
+                m = _COMMENT_RE.match(line)
+                if m:
+                    return m.group(1)[:120]
+                return ""  # first non-blank is not a comment
+    except OSError:
+        return ""
+    return ""
