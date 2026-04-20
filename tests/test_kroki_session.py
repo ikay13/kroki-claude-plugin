@@ -284,6 +284,146 @@ class TestCommon:
         result = common.git_detect_tags_on_head("v*")
         assert result == []
 
+    def test_resolve_session_log_from_memory(self, tmp_path, monkeypatch):
+        """Primary path: use memory's latest_session_log frontmatter field."""
+        # Set up memory
+        memory_dir = tmp_path / ".claude" / "projects" / "-home-orin" / "memory"
+        memory_dir.mkdir(parents=True)
+        (memory_dir / "project_testproject.md").write_text(textwrap.dedent("""\
+            ---
+            project_name: TestProject
+            latest_session_log: sessions/2026-04-20-TestProject-session-03.md
+            ---
+            """))
+        # Set up vault
+        vault = tmp_path / "Documents" / "Obsidian Vault" / "TestProject"
+        sessions_dir = vault / "sessions"
+        sessions_dir.mkdir(parents=True)
+        target = sessions_dir / "2026-04-20-TestProject-session-03.md"
+        target.write_text("# Session 03\n")
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        result = common.resolve_session_log("TestProject", which="latest")
+        assert result == target
+
+    def test_resolve_session_log_glob_fallback(self, tmp_path, monkeypatch):
+        """Fallback: if memory absent, glob + sort by NN."""
+        vault = tmp_path / "Documents" / "Obsidian Vault" / "TestProject"
+        sessions_dir = vault / "sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / "2026-04-17-TestProject-session-00.md").write_text("# 00\n")
+        (sessions_dir / "2026-04-18-TestProject-session-01.md").write_text("# 01\n")
+        (sessions_dir / "2026-04-20-TestProject-session-02.md").write_text("# 02\n")
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        latest = common.resolve_session_log("TestProject", which="latest")
+        assert latest.name == "2026-04-20-TestProject-session-02.md"
+
+        prev = common.resolve_session_log("TestProject", which="previous")
+        assert prev.name == "2026-04-18-TestProject-session-01.md"
+
+    def test_resolve_session_log_none_when_absent(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert common.resolve_session_log("NoSuchProject", which="latest") is None
+
+    def test_parse_session_log_with_diagrams(self, memory_fixtures_dir):
+        path = memory_fixtures_dir / "session-log-with-diagrams.md"
+        result = common.parse_session_log(path)
+        assert result["frontmatter"]["project"] == "TestProject"
+        assert result["frontmatter"]["session_nn"] == "3"
+        # Each diagram embed block produces one "diagram" entry (by basename)
+        assert "arch-overview" in result["diagrams"]
+        assert "seq-login-flow" in result["diagrams"]
+
+    def test_parse_session_log_without_diagrams(self, memory_fixtures_dir):
+        path = memory_fixtures_dir / "session-log-without-diagrams.md"
+        result = common.parse_session_log(path)
+        assert result["diagrams"] == []
+
+    def test_parse_session_log_malformed(self, memory_fixtures_dir, capsys):
+        path = memory_fixtures_dir / "session-log-malformed.md"
+        result = common.parse_session_log(path)
+        # Best-effort: should not crash; may return empty dicts/lists
+        assert isinstance(result.get("diagrams", []), list)
+
+    def test_write_session_log_section_creates_when_absent(self, tmp_path):
+        target = tmp_path / "session.md"
+        target.write_text(textwrap.dedent("""\
+            # Session 01
+
+            ## session-goal
+
+            A goal.
+
+            ## what-was-done
+
+            Things.
+            """))
+        common.write_session_log_section(target, "## diagrams", "new content here\n")
+        text = target.read_text()
+        assert "## diagrams" in text
+        assert "new content here" in text
+        # New section should appear at end (no subsequent ## before it)
+        assert text.rstrip().endswith("new content here")
+
+    def test_write_session_log_section_replaces_existing(self, tmp_path):
+        target = tmp_path / "session.md"
+        target.write_text(textwrap.dedent("""\
+            # Session 01
+
+            ## diagrams
+
+            old embed content
+
+            ## artifacts-produced
+
+            some-file.py
+            """))
+        common.write_session_log_section(target, "## diagrams", "new embed content\n")
+        text = target.read_text()
+        assert "old embed content" not in text
+        assert "new embed content" in text
+        assert "## artifacts-produced" in text  # preserved
+        assert "some-file.py" in text
+
+    def test_write_session_log_section_idempotent(self, tmp_path):
+        target = tmp_path / "session.md"
+        target.write_text("# Session 01\n\n## what-was-done\n\nThings.\n")
+        common.write_session_log_section(target, "## diagrams", "content-v1\n")
+        first = target.read_text()
+        common.write_session_log_section(target, "## diagrams", "content-v1\n")
+        second = target.read_text()
+        assert first == second  # same content → same file
+
+    def test_write_session_log_section_dedupes_on_corruption(self, tmp_path):
+        """If ## diagrams appears twice (buggy prior run), write replaces all and leaves one."""
+        target = tmp_path / "session.md"
+        target.write_text(textwrap.dedent("""\
+            # Session 01
+
+            ## diagrams
+
+            dup1
+
+            ## what-was-done
+
+            Stuff.
+
+            ## diagrams
+
+            dup2
+            """))
+        common.write_session_log_section(target, "## diagrams", "canonical\n")
+        text = target.read_text()
+        # Exactly one ## diagrams
+        assert text.count("\n## diagrams") == 1
+        assert "dup1" not in text
+        assert "dup2" not in text
+        assert "canonical" in text
+        # what-was-done preserved
+        assert "## what-was-done" in text
+        assert "Stuff." in text
+
 
 class TestStart:
     """mode=start behaviors — start.py"""

@@ -360,3 +360,149 @@ def git_detect_tags_on_head(pattern: str = "v*", cwd: Path | None = None) -> lis
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def resolve_session_log(project: str, which: Literal["latest", "previous"] = "latest") -> Path | None:
+    """Find a session log.
+
+    Primary path: read memory's latest_session_log frontmatter field → resolve to absolute path.
+    Fallback: glob <vault>/sessions/YYYY-MM-DD-<project>-session-NN.md, sort by NN.
+
+    which="latest" → highest NN. which="previous" → second-highest (None if only one exists).
+    Returns None if no session log found.
+    """
+    # Try memory first
+    memory = parse_memory(project)
+    latest_rel = memory.get("latest_session_log")
+
+    try:
+        vault_dir = vault_paths(project)
+    except ProjectFolderNotFoundError:
+        return None
+
+    sessions_dir = vault_dir / "sessions"
+
+    if which == "latest" and latest_rel:
+        # memory.latest_session_log is a path relative to the vault project folder
+        candidate = vault_dir / latest_rel
+        if candidate.is_file():
+            return candidate
+
+    # Fallback: glob + NN sort
+    if not sessions_dir.is_dir():
+        return None
+    pattern = re.compile(rf"^\d{{4}}-\d{{2}}-\d{{2}}-{re.escape(project)}-session-(\d+)\.md$")
+    logs_with_nn: list[tuple[int, Path]] = []
+    for p in sessions_dir.iterdir():
+        m = pattern.match(p.name)
+        if m:
+            logs_with_nn.append((int(m.group(1)), p))
+    if not logs_with_nn:
+        return None
+    logs_with_nn.sort(key=lambda t: t[0])
+
+    if which == "latest":
+        return logs_with_nn[-1][1]
+    elif which == "previous":
+        if len(logs_with_nn) < 2:
+            return None
+        return logs_with_nn[-2][1]
+    else:
+        return None
+
+
+# Match basenames in `<div class="kroki-dual">...![[<basename>.light.svg]]...![[<basename>.dark.svg]]...</div>`
+_DUAL_EMBED_RE = re.compile(
+    r'<div\s+class="kroki-dual">.*?!\[\[(?P<basename>[^\]|.]+)\.light\.svg\]\].*?</div>',
+    re.DOTALL,
+)
+
+
+def parse_session_log(path: Path) -> dict:
+    """Parse a session log into frontmatter + diagram basenames + section raw texts.
+
+    Returns:
+        {
+          "frontmatter": dict (may be {} on malformed),
+          "diagrams": list[str] of basenames found in ## diagrams section embeds,
+          "sections": dict of section-name → raw content,
+        }
+    """
+    if not path.exists():
+        return {"frontmatter": {}, "diagrams": [], "sections": {}}
+
+    text = path.read_text(encoding="utf-8")
+    frontmatter, body = _parse_frontmatter(text)
+    sections = _parse_body_sections(body)
+
+    diagrams_section = sections.get("diagrams", "")
+    basenames: list[str] = []
+    for m in _DUAL_EMBED_RE.finditer(diagrams_section):
+        basenames.append(m.group("basename"))
+
+    return {"frontmatter": frontmatter, "diagrams": basenames, "sections": sections}
+
+
+def write_session_log_section(path: Path, section_header: str, content: str) -> None:
+    """Replace-or-append the named ## section idempotently. Atomic.
+
+    Algorithm per spec §4.1:
+    - Read file; split into lines.
+    - Find all occurrences of section_header at line-start.
+    - Delete each from its header line through the line before the next "## " (or EOF).
+    - Insert one new "{section_header}\n\n{content_stripped}\n" at position of first original occurrence,
+      or at EOF if none existed.
+    - Atomic write.
+    """
+    if not path.exists():
+        # Defensive: create with just the new section
+        atomic_write(path, f"{section_header}\n\n{content.rstrip()}\n")
+        return
+
+    text = path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+
+    header_norm = section_header.strip()
+    # Find all section boundaries: indices where a line starts "## " (level-2 heading)
+    occurrences: list[int] = []  # indices of matching section headers
+    next_h2: list[int] = []      # for each occurrence, the end index (start of next ## or len(lines))
+
+    for i, line in enumerate(lines):
+        if line.strip() == header_norm:
+            occurrences.append(i)
+
+    # For each occurrence, find the next "## " heading
+    for start in occurrences:
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            if lines[j].startswith("## "):
+                end = j
+                break
+        next_h2.append(end)
+
+    if occurrences:
+        # Delete all occurrences from highest index down
+        insert_at = occurrences[0]
+        for start, end in sorted(zip(occurrences, next_h2), reverse=True):
+            del lines[start:end]
+        # Remove trailing blank lines left behind right before insert_at
+        while insert_at > 0 and lines[insert_at - 1] == "":
+            lines.pop(insert_at - 1)
+            insert_at -= 1
+        # Prepare insertion
+        block = [section_header, "", content.rstrip(), ""]
+        # Ensure one blank line separator before the inserted block if previous line exists and isn't blank
+        if insert_at > 0 and lines[insert_at - 1] != "":
+            block.insert(0, "")
+        for k, new_line in enumerate(block):
+            lines.insert(insert_at + k, new_line)
+    else:
+        # Append at end
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(section_header)
+        lines.append("")
+        lines.append(content.rstrip())
+        lines.append("")
+
+    atomic_write(path, "\n".join(lines))
