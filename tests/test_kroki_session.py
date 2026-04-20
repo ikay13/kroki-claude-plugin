@@ -103,6 +103,86 @@ class TestCommon:
         src.write_text("@startuml\nfoo -> bar\n")
         assert common.extract_purpose(src) == ""
 
+    @pytest.fixture
+    def memory_fixtures_dir(self):
+        return Path(__file__).parent / "fixtures" / "session-fixtures"
+
+    def test_parse_memory_complete(self, tmp_path, monkeypatch, memory_fixtures_dir):
+        """Fully populated memory file returns all expected fields."""
+        memory_dir = tmp_path / ".claude" / "projects" / "-home-orin" / "memory"
+        memory_dir.mkdir(parents=True)
+        target = memory_dir / "project_testproject.md"
+        target.write_text((memory_fixtures_dir / "memory-complete.md").read_text())
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        result = common.parse_memory("TestProject")
+        assert result["project_name"] == "TestProject"
+        assert result["latest_session_log"] == "sessions/2026-04-20-TestProject-session-03.md"
+        assert result["touched_diagrams"] == ["arch-overview", "seq-login-flow"]
+        assert len(result["next_steps"]) == 3
+        assert "Write tests for foo" in result["next_steps"][0]
+        assert result["current_status"].startswith("Phase 1 complete")
+
+    def test_parse_memory_minimal(self, tmp_path, monkeypatch, memory_fixtures_dir):
+        """Memory with only frontmatter returns empty body sections."""
+        memory_dir = tmp_path / ".claude" / "projects" / "-home-orin" / "memory"
+        memory_dir.mkdir(parents=True)
+        target = memory_dir / "project_testproject.md"
+        target.write_text((memory_fixtures_dir / "memory-minimal.md").read_text())
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        result = common.parse_memory("TestProject")
+        assert result["project_name"] == "TestProject"
+        assert result.get("touched_diagrams", []) == []
+        assert result.get("next_steps", []) == []
+
+    def test_parse_memory_missing_file(self, tmp_path, monkeypatch):
+        """Missing memory file returns empty dict, no exception."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = common.parse_memory("NonExistent")
+        assert result == {}
+
+    def test_parse_memory_malformed_returns_partial(self, tmp_path, monkeypatch, memory_fixtures_dir, capsys):
+        """Malformed frontmatter logs warning, returns best-effort dict."""
+        memory_dir = tmp_path / ".claude" / "projects" / "-home-orin" / "memory"
+        memory_dir.mkdir(parents=True)
+        target = memory_dir / "project_testproject.md"
+        target.write_text((memory_fixtures_dir / "memory-malformed.md").read_text())
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        result = common.parse_memory("TestProject")
+        captured = capsys.readouterr()
+        assert "warning" in captured.err.lower() or "malformed" in captured.err.lower()
+        # Best-effort: we got something; don't require specific fields
+        assert isinstance(result, dict)
+
+    def test_write_memory_roundtrip(self, tmp_path, monkeypatch, memory_fixtures_dir):
+        """write_memory after parse_memory preserves frontmatter + body; updates last_updated."""
+        memory_dir = tmp_path / ".claude" / "projects" / "-home-orin" / "memory"
+        memory_dir.mkdir(parents=True)
+        target = memory_dir / "project_testproject.md"
+        target.write_text((memory_fixtures_dir / "memory-complete.md").read_text())
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        data = common.parse_memory("TestProject")
+        data["touched_diagrams"] = ["arch-overview", "seq-login-flow", "new-diagram"]
+        common.write_memory("TestProject", data)
+
+        reread = common.parse_memory("TestProject")
+        assert "new-diagram" in reread["touched_diagrams"]
+        # Core frontmatter preserved
+        assert reread["project_name"] == "TestProject"
+
+    def test_write_memory_snake_case_filename(self, tmp_path, monkeypatch):
+        """Project name converts to snake_case for filename."""
+        memory_dir = tmp_path / ".claude" / "projects" / "-home-orin" / "memory"
+        memory_dir.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        common.write_memory("My-Fancy Project", {"project_name": "My-Fancy Project",
+                                                   "touched_diagrams": []})
+        assert (memory_dir / "project_my_fancy_project.md").exists()
+
 
 class TestStart:
     """mode=start behaviors — start.py"""
