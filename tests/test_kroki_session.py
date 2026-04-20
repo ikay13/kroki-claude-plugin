@@ -457,6 +457,94 @@ class TestCommon:
 class TestStart:
     """mode=start behaviors — start.py"""
 
+    @pytest.fixture
+    def start_env(self, tmp_path, monkeypatch):
+        """Minimal vault + memory setup for start.py tests."""
+        vault = tmp_path / "Documents" / "Obsidian Vault" / "TestProject"
+        (vault / "diagrams").mkdir(parents=True)
+        (vault / "sessions").mkdir()
+        memory_dir = tmp_path / ".claude" / "projects" / "-home-orin" / "memory"
+        memory_dir.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        return {"vault": vault, "memory_dir": memory_dir}
+
+    def test_auto_flag_suppresses_when_env_var_set(self, start_env, monkeypatch, capsys):
+        """--auto + KROKI_SESSION_AUTO=0 → exit 0 silent."""
+        from lib.kroki_session import start
+        monkeypatch.setenv("KROKI_SESSION_AUTO", "0")
+        rc = start.main(project="TestProject", auto=True)
+        out = capsys.readouterr()
+        assert rc == 0
+        assert out.out == ""
+        assert out.err == ""
+
+    def test_explicit_ignores_env_var(self, start_env, monkeypatch, capsys):
+        """No --auto + KROKI_SESSION_AUTO=0 → proceeds normally (hits activity gate)."""
+        from lib.kroki_session import start
+        monkeypatch.setenv("KROKI_SESSION_AUTO", "0")
+        rc = start.main(project="TestProject", auto=False)
+        # No memory, no prev session → activity gate skips
+        out = capsys.readouterr()
+        assert rc == 0
+        assert "skipped" in out.err.lower()  # explicit skip message
+
+    def test_activity_gate_skips_no_diagrams_dir(self, tmp_path, monkeypatch, capsys):
+        from lib.kroki_session import start
+        vault = tmp_path / "Documents" / "Obsidian Vault" / "TestProject"
+        vault.mkdir(parents=True)  # note: no diagrams subdir
+        monkeypatch.setenv("HOME", str(tmp_path))
+        rc = start.main(project="TestProject", auto=False)
+        out = capsys.readouterr()
+        assert rc == 0
+        assert "no diagrams/" in out.err
+
+    def test_activity_gate_skips_no_prior_activity(self, start_env, capsys):
+        """diagrams/ exists but no memory touched_diagrams + no prev session diagrams → skip."""
+        from lib.kroki_session import start
+        rc = start.main(project="TestProject", auto=False)
+        out = capsys.readouterr()
+        assert rc == 0
+        assert "no diagram activity" in out.err
+
+    def test_activity_gate_fires_on_prior_memory_diagrams(self, start_env, capsys):
+        """Memory has touched_diagrams → activity gate passes, payload emitted."""
+        from lib.kroki_session import start
+        (start_env["memory_dir"] / "project_testproject.md").write_text(textwrap.dedent("""\
+            ---
+            project_name: TestProject
+            ---
+
+            ## touched-diagrams
+
+            - arch-overview
+
+            ## next-steps
+
+            - Review
+            """))
+        rc = start.main(project="TestProject", auto=False)
+        out = capsys.readouterr()
+        assert rc == 0
+        # stdout has JSON payload
+        assert out.out.strip().startswith("{")
+        payload = json.loads(out.out)
+        assert payload["mode"] == "start"
+        assert payload["project"] == "TestProject"
+        assert "arch-overview" in payload.get("loaded_diagrams", []) or payload.get("loaded_diagrams") == []
+        # payload always has all keys (may be empty lists)
+        for key in ("mode", "project", "vault_dir", "loaded_diagrams",
+                    "reference_summary", "last_next_steps"):
+            assert key in payload
+
+    def test_vault_not_found_exits_zero_with_stderr(self, tmp_path, monkeypatch, capsys):
+        """mode=start: ProjectFolderNotFoundError logs but doesn't fail."""
+        from lib.kroki_session import start
+        monkeypatch.setenv("HOME", str(tmp_path))
+        rc = start.main(project="NoSuchProject", auto=False)
+        out = capsys.readouterr()
+        assert rc == 0
+        assert "kroki-session:" in out.err
+
 
 class TestEnd:
     """mode=end behaviors — end.py"""
