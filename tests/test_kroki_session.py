@@ -595,14 +595,76 @@ class TestEnd:
     def test_pod_preflight_success_continues(self, end_env, monkeypatch):
         from lib.kroki_session import end
 
+        real_run = subprocess.run
         def fake_run(cmd, **kwargs):
             if "pod-health.sh" in str(cmd):
                 return subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=b"")
-            return subprocess.run(cmd, **kwargs)
+            # For all other commands (including git), use the real subprocess.run
+            return real_run(cmd, **kwargs)
 
         monkeypatch.setattr("subprocess.run", fake_run)
         rc = end.main(project="TestProject", vault_path_override=end_env["project_root"])
         assert rc == 0  # clean vault with no diagram work → exit 0
+
+    def test_detached_head_skips_gracefully(self, end_env, monkeypatch, capsys):
+        from lib.kroki_session import end
+        from unittest.mock import Mock
+
+        # Detach HEAD
+        sha = subprocess.run(["git", "-C", str(end_env["project_root"]), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "-C", str(end_env["project_root"]), "checkout", "-q", sha], check=True)
+
+        real_run = subprocess.run
+        def fake_run(cmd, **kwargs):
+            if "pod-health.sh" in str(cmd):
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            # For all other commands (including git), use the real subprocess.run
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=end_env["project_root"])
+        out = capsys.readouterr()
+        assert rc == 0
+        assert "detached HEAD" in out.err
+
+    def test_no_repo_skips_gracefully(self, tmp_path, monkeypatch, capsys):
+        """NO_REPO → skip with stderr note, exit 0."""
+        from lib.kroki_session import end
+        project_root = tmp_path / "Documents" / "Obsidian Vault" / "NoRepoProject"
+        (project_root / "diagrams").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(project_root)
+
+        real_run = subprocess.run
+        def fake_run(cmd, **kwargs):
+            if "pod-health.sh" in str(cmd):
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            # For all other commands (including git), use the real subprocess.run
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="NoRepoProject", vault_path_override=project_root)
+        out = capsys.readouterr()
+        assert rc == 0
+        assert "no git repo" in out.err.lower() or "no_repo" in out.err.lower()
+
+    def test_no_changes_exits_zero_silent(self, end_env, monkeypatch, capsys):
+        """Clean repo, no diagram work, no tags → exit 0 with skip stderr."""
+        from lib.kroki_session import end
+
+        real_run = subprocess.run
+        def fake_run(cmd, **kwargs):
+            if "pod-health.sh" in str(cmd):
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            # For all other commands (including git), use the real subprocess.run
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=end_env["project_root"])
+        out = capsys.readouterr()
+        assert rc == 0
+        assert "no diagram activity" in out.err or "skipped" in out.err.lower()
 
 
 class TestSnapshot:

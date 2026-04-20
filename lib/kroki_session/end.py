@@ -50,10 +50,51 @@ def main(
         )
         return 2
 
-    # More steps to be added in subsequent tasks
-    # TODO(task-12): git state + diff detection
-    # TODO(task-13): per-diagram render loop
-    # TODO(task-14): embed + index + memory + milestone
+    diagrams_dir = vault_dir / "diagrams"
+    milestones_dir = diagrams_dir / "milestones"
+
+    # Step 3: git state check
+    gs = common.git_state_check(cwd=vault_dir)
+    if gs == common.GitState.NO_GIT:
+        print("kroki-session: git not found in PATH — kroki-session requires git",
+              file=sys.stderr)
+        return 2
+    if gs == common.GitState.DETACHED:
+        print("kroki-session: skipped (detached HEAD — session snapshots require a branch)",
+              file=sys.stderr)
+        return 0
+    if gs == common.GitState.MERGE:
+        print("kroki-session: skipped (merge in progress — resolve before snapshotting)",
+              file=sys.stderr)
+        return 0
+    if gs == common.GitState.NO_REPO:
+        print("kroki-session: skipped (project has no git repo; snapshots skipped)",
+              file=sys.stderr)
+        return 0
+
+    # Step 4: detect changes
+    changes = common.git_detect_changes(diagrams_dir, cwd=vault_dir)
+
+    # Step 5: milestone pre-check
+    auto_milestone_tag: str | None = None
+    if milestone_label is None:
+        tags = common.git_detect_tags_on_head(pattern="v*", cwd=vault_dir)
+        for tag in tags:
+            light_svg = milestones_dir / f"{tag}.light.svg"
+            skip_sentinel = milestones_dir / f"{tag}.skip"
+            if not light_svg.exists() and not skip_sentinel.exists():
+                auto_milestone_tag = tag
+                break
+
+    # Step 6: early exit
+    no_changes = not (changes["modified"] or changes["new"] or changes["deleted"])
+    if no_changes and milestone_label is None and auto_milestone_tag is None:
+        print("kroki-session: skipped (no diagram activity)", file=sys.stderr)
+        return 0
+
+    # More steps in next task
+    # TODO(task-13): per-diagram render loop + deleted logging
+    # TODO(task-14): INDEX regen + session log resolution + embed + milestone + memory + summary
 
     return 0
 
