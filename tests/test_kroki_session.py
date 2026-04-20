@@ -731,6 +731,171 @@ class TestEnd:
         rc = end.main(project="TestProject", vault_path_override=pr)
         assert rc == 1
 
+    def test_session_log_missing_skips_embed(self, end_env, monkeypatch, capsys):
+        """mode=end proceeds through all steps, skips embed (no stub created)."""
+        from lib.kroki_session import end
+        pr = end_env["project_root"]
+        diag = self._add_and_commit_diagram(pr, "arch", "' Arch\n@startuml\nA\n@enduml\n")
+        diag.write_text("' Arch (v2)\n@startuml\nA2\n@enduml\n")
+
+        real_run = subprocess.run
+        def fake_run(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if any(s in cmd_str for s in ["pod-health.sh", "render.sh", "a11y-check.sh",
+                                            "update-index.sh"]):
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if "embed-in-md.sh" in cmd_str:
+                raise AssertionError("embed-in-md.sh should NOT be called (no session log)")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        # No session log file in sessions/
+        rc = end.main(project="TestProject", vault_path_override=pr)
+        out = capsys.readouterr()
+        assert rc == 0
+        assert "no session log found" in out.err
+        assert "embed skipped" in out.err
+        # No stub created
+        assert not any((pr / "sessions").iterdir())
+
+    def test_milestone_auto_detect_semver_only(self, end_env, monkeypatch, capsys):
+        """v* tag on HEAD triggers milestone; non-semver tags don't."""
+        from lib.kroki_session import end
+        pr = end_env["project_root"]
+        subprocess.run(["git", "-C", str(pr), "tag", "v1.0.0"], check=True)
+        subprocess.run(["git", "-C", str(pr), "tag", "last-good"], check=True)
+        # Create a session log so embed doesn't warn
+        (pr / "sessions" / "2026-04-20-TestProject-session-00.md").write_text(
+            "---\nproject: TestProject\n---\n\n# Session 00\n\n## what-was-done\n\nstuff\n"
+        )
+
+        snapshot_called_with: list[list[str]] = []
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "pod-health.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if "session-snapshot.sh" in cmd_str:
+                snapshot_called_with.append([str(c) for c in cmd])
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if any(s in cmd_str for s in ["render.sh", "a11y-check.sh",
+                                            "update-index.sh", "embed-in-md.sh"]):
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=pr)
+        assert rc == 0
+        # session-snapshot.sh was invoked with --milestone-label v1.0.0
+        assert len(snapshot_called_with) == 1
+        flat = " ".join(snapshot_called_with[0])
+        assert "v1.0.0" in flat
+        assert "last-good" not in flat
+
+    def test_milestone_skip_sentinel_honored(self, end_env, monkeypatch):
+        """If diagrams/milestones/<tag>.skip exists, milestone is not auto-triggered."""
+        from lib.kroki_session import end
+        pr = end_env["project_root"]
+        subprocess.run(["git", "-C", str(pr), "tag", "v1.0.0"], check=True)
+        milestones = pr / "diagrams" / "milestones"
+        milestones.mkdir()
+        (milestones / "v1.0.0.skip").write_text("")
+
+        snapshot_calls = []
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "pod-health.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if "session-snapshot.sh" in cmd_str:
+                snapshot_calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if any(s in cmd_str for s in ["render.sh", "a11y-check.sh",
+                                            "update-index.sh", "embed-in-md.sh"]):
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=pr)
+        assert rc == 0
+        assert snapshot_calls == []  # no snapshot triggered
+
+    def test_milestone_light_svg_existence_skips(self, end_env, monkeypatch):
+        """If milestones/<tag>.light.svg exists (already snapshotted), skip."""
+        from lib.kroki_session import end
+        pr = end_env["project_root"]
+        subprocess.run(["git", "-C", str(pr), "tag", "v1.0.0"], check=True)
+        milestones = pr / "diagrams" / "milestones"
+        milestones.mkdir()
+        (milestones / "v1.0.0.light.svg").write_text("<svg/>")
+
+        snapshot_calls = []
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "pod-health.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if "session-snapshot.sh" in cmd_str:
+                snapshot_calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if any(s in cmd_str for s in ["render.sh", "a11y-check.sh",
+                                            "update-index.sh", "embed-in-md.sh"]):
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        end.main(project="TestProject", vault_path_override=pr)
+        assert snapshot_calls == []
+
+    def test_memory_touched_diagrams_deduped(self, end_env, monkeypatch):
+        """Memory ## touched-diagrams: existing + new, deduplicated, sorted."""
+        from lib.kroki_session import end
+        pr = end_env["project_root"]
+        # Prime memory with an existing entry
+        memory_dir = end_env["tmp_path"] / ".claude" / "projects" / "-home-orin" / "memory"
+        (memory_dir / "project_testproject.md").write_text(textwrap.dedent("""\
+            ---
+            project_name: TestProject
+            ---
+
+            ## touched-diagrams
+
+            - old-diagram
+            - shared
+            """))
+        # Session log present
+        (pr / "sessions" / "2026-04-20-TestProject-session-00.md").write_text(
+            "---\nproject: TestProject\n---\n\n# S00\n\n## what-was-done\n\nx\n"
+        )
+        diag_shared = self._add_and_commit_diagram(pr, "shared", "' shared\n@startuml\nX\n@enduml\n")
+        diag_new = pr / "diagrams" / "fresh.puml"
+        diag_shared.write_text("' shared v2\n@startuml\nY\n@enduml\n")
+        diag_new.write_text("' fresh\n@startuml\nZ\n@enduml\n")
+
+        real_run = subprocess.run
+        def fake_run(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "pod-health.sh" in cmd_str:
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            if any(s in cmd_str for s in ["render.sh", "a11y-check.sh",
+                                            "update-index.sh", "embed-in-md.sh"]):
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        rc = end.main(project="TestProject", vault_path_override=pr)
+        assert rc == 0
+
+        updated = common.parse_memory("TestProject")
+        td = updated["touched_diagrams"]
+        assert "old-diagram" in td  # preserved
+        assert "shared" in td  # preserved (dedup)
+        assert "fresh" in td  # added
+        assert td == sorted(set(td))  # sorted, deduplicated
+
 
 class TestSnapshot:
     """milestone snapshot behaviors — snapshot.py"""
