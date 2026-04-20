@@ -506,3 +506,36 @@ def write_session_log_section(path: Path, section_header: str, content: str) -> 
         lines.append("")
 
     atomic_write(path, "\n".join(lines))
+
+
+class ReferenceEntry(TypedDict):
+    basename: str
+    purpose: str
+    last_updated: str
+
+
+# Matches INDEX.md row: | [[basename.svg|Title]] | Purpose | YYYY-MM-DD | source.ext |
+_INDEX_ROW_RE = re.compile(
+    r"^\|\s*\[\[(?P<basename>[^.|\]]+)\.svg\|[^\]]*\]\]\s*\|"
+    r"\s*(?P<purpose>[^|]+?)\s*\|"
+    r"\s*(?P<date>\d{4}-\d{2}-\d{2})\s*\|"
+)
+
+
+def parse_index_summary(path: Path) -> list[ReferenceEntry]:
+    """Parse diagrams/INDEX.md table rows into ReferenceEntry list.
+
+    Empty list if file absent or unparseable.
+    """
+    if not path.exists():
+        return []
+    entries: list[ReferenceEntry] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = _INDEX_ROW_RE.match(line)
+        if m:
+            entries.append({
+                "basename": m.group("basename"),
+                "purpose": m.group("purpose").strip(),
+                "last_updated": m.group("date"),
+            })
+    return entries

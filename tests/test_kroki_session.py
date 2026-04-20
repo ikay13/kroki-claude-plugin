@@ -424,6 +424,35 @@ class TestCommon:
         assert "## what-was-done" in text
         assert "Stuff." in text
 
+    def test_parse_index_summary_parses_rows(self, tmp_path):
+        """Parse INDEX.md table rows into ReferenceEntry list."""
+        index = tmp_path / "INDEX.md"
+        index.write_text(textwrap.dedent("""\
+            # Diagrams
+
+            ## arch
+
+            | File | Purpose | Updated | Source |
+            |------|---------|---------|--------|
+            | [[arch-overview.svg|Arch Overview]] | System overview | 2026-04-20 | arch-overview.puml |
+
+            ## seq
+
+            | File | Purpose | Updated | Source |
+            |------|---------|---------|--------|
+            | [[seq-login.svg|Seq Login]] | Login sequence flow | 2026-04-19 | seq-login.puml |
+            """))
+        result = common.parse_index_summary(index)
+        assert len(result) == 2
+        assert any(e["basename"] == "arch-overview" and e["purpose"] == "System overview"
+                   and e["last_updated"] == "2026-04-20" for e in result)
+        assert any(e["basename"] == "seq-login" for e in result)
+
+    def test_parse_index_summary_missing_file(self, tmp_path):
+        """Missing INDEX.md returns empty list, no error."""
+        result = common.parse_index_summary(tmp_path / "missing.md")
+        assert result == []
+
 
 class TestStart:
     """mode=start behaviors — start.py"""
