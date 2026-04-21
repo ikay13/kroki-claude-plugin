@@ -93,3 +93,37 @@ Machine-readable YAML style files in `styles/`:
 Each is paired with a Markdown explainer (`.md`) describing rationale.
 
 Consumed by `render-with-legend.sh`, `a11y-check.sh`, and `flatten.sh`.
+
+## Autosave daemon (Plan 5d, v1.3.0+)
+
+The `kroki-autosave` systemd user service watches `<vault>/*/diagrams/` and
+`<vault>/*/sessions/` directories via inotify; every file save stages a
+time-stamped copy to `~/.kroki-plugin/autosaves/<project>/` with a 7-day TTL.
+
+### CLI
+
+- `kroki-autosave list [<path>]` — list staged autosaves
+- `kroki-autosave restore <path> [<ts|hash>]` — restore an earlier version
+- `kroki-autosave prune [--dry-run]` — manual prune (same logic as daemon)
+- `kroki-autosave status` — daemon status + divergence summary
+- `kroki-autosave reload` — SIGHUP the daemon (re-scans vault for new projects)
+
+### Inotify watch limits
+
+Default `fs.inotify.max_user_watches=8192` is comfortable for any vault
+with fewer than ~1000 project folders. To check or raise:
+
+```
+cat /proc/sys/fs/inotify/max_user_watches
+sudo sysctl fs.inotify.max_user_watches=16384
+echo 'fs.inotify.max_user_watches=16384' | sudo tee /etc/sysctl.d/99-inotify.conf
+```
+
+### Troubleshooting
+
+- **Daemon not running:** `systemctl --user status kroki-autosave`
+- **Staging skipped for a project:** check for `<project>/.no-autosave` marker
+- **Daemon logs:** `journalctl --user -u kroki-autosave -f`
+- **User notifications:** `tail -f ~/.kroki-plugin/notifications.log`
+- **Disabling per-project:** `touch <vault>/<project>/.no-autosave`
+- **Disabling globally:** set `autosave.enabled: false` in `~/.kroki-plugin/config.yml` + `systemctl --user restart kroki-autosave`
