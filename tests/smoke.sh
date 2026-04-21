@@ -18,8 +18,9 @@ RENDER="$PLUGIN_DIR/scripts/render.sh"
 FIXTURES_DIR="$PLUGIN_DIR/tests/fixtures"
 OUTPUT_DIR=$(mktemp -d /tmp/kroki-smoke-XXXXXX)
 INT_DIR=""
+ED_SCRATCH=""
 shopt -s nullglob
-cleanup_smoke() { [[ -n "$OUTPUT_DIR" ]] && rm -rf "$OUTPUT_DIR"; [[ -n "$INT_DIR" ]] && rm -rf "$INT_DIR"; }
+cleanup_smoke() { [[ -n "$OUTPUT_DIR" ]] && rm -rf "$OUTPUT_DIR"; [[ -n "$INT_DIR" ]] && rm -rf "$INT_DIR"; [[ -n "$ED_SCRATCH" ]] && rm -rf "$ED_SCRATCH"; }
 trap cleanup_smoke EXIT INT TERM
 
 FULL_MODE=false
@@ -212,6 +213,170 @@ PUML
         exit 1
     fi
     cd "$PLUGIN_DIR"
+fi
+
+# Restore full cleanup trap now that ROUND_TRIP_DIR is done.
+trap cleanup_smoke EXIT INT TERM
+
+# --- Plan 5c editor-lock lifecycle smoke tests (Tasks 10-11) ---
+if $FULL_MODE; then
+    echo ""
+    echo "=== editor-lock lifecycle (Tasks 10-11) ==="
+
+    ED_SCRATCH=$(mktemp -d /tmp/kroki-editor-smoke-XXXXXX)
+
+    ED_HOME="$ED_SCRATCH/home"
+    mkdir -p "$ED_HOME"
+
+    # Stubs on PATH for pod-health.sh and xdg-open.
+    ED_STUBS="$ED_SCRATCH/stubs"
+    mkdir -p "$ED_STUBS"
+    cat > "$ED_STUBS/pod-health.sh" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+    chmod +x "$ED_STUBS/pod-health.sh"
+    cat > "$ED_STUBS/xdg-open" <<'STUB'
+#!/usr/bin/env bash
+echo "xdg-open $*" >> "${HOME:-/tmp}/xdg-open.log"
+exit 0
+STUB
+    chmod +x "$ED_STUBS/xdg-open"
+
+    # Snapshot current environment; we set HOME/PATH/DISPLAY for each scenario and restore after.
+    SAVED_HOME="${HOME-}"
+    SAVED_PATH="$PATH"
+    SAVED_DISPLAY="${DISPLAY-__unset__}"
+    SAVED_WAYLAND="${WAYLAND_DISPLAY-__unset__}"
+
+    export HOME="$ED_HOME"
+    export PATH="$ED_STUBS:$PATH"
+    export DISPLAY=":99"
+    unset WAYLAND_DISPLAY
+
+    ED_LOCK="$ED_HOME/.kroki-plugin/.active-editor.lock"
+
+    ED_FIXTURE="$ED_SCRATCH/arch-smoke.puml"
+    cat > "$ED_FIXTURE" <<'PUML'
+@startuml
+A -> B
+@enduml
+PUML
+
+    # S1: editor-open.sh <file> writes lock with source_path.
+    "$PLUGIN_DIR/scripts/editor-open.sh" "$ED_FIXTURE" >/dev/null
+    if [[ -f "$ED_LOCK" ]] && python3 -c "import json,sys; d=json.load(open('$ED_LOCK')); sys.exit(0 if d['source_path'] == '$(realpath "$ED_FIXTURE")' else 1)"; then
+        echo "  [OK]  S1: editor-open.sh writes lock with source_path matching abspath"
+    else
+        echo "  [FAIL] S1: lock content mismatch or missing"
+        cat "$ED_LOCK" 2>/dev/null || echo "  (lock missing)"
+        exit 1
+    fi
+    (cd "$PLUGIN_DIR" && HOME="$ED_HOME" python3 -m lib.kroki_session.lock close) >/dev/null
+
+    # S2: blank session (no arg) writes lock with source_path: null.
+    "$PLUGIN_DIR/scripts/editor-open.sh" >/dev/null
+    if [[ -f "$ED_LOCK" ]] && python3 -c "import json,sys; d=json.load(open('$ED_LOCK')); sys.exit(0 if d['source_path'] is None else 1)"; then
+        echo "  [OK]  S2: blank session lock has source_path: null"
+    else
+        echo "  [FAIL] S2: blank session lock content mismatch"
+        exit 1
+    fi
+
+    # S3: editor-open while lock held → exit 3.
+    S3_STDERR="$ED_SCRATCH/s3.stderr"
+    if "$PLUGIN_DIR/scripts/editor-open.sh" "$ED_FIXTURE" 2>"$S3_STDERR"; then
+        echo "  [FAIL] S3: editor-open.sh should have exited 3 with lock held"
+        exit 1
+    else
+        S3_RC=$?
+        if [[ $S3_RC -eq 3 ]] && grep -qi "held\|lock" "$S3_STDERR"; then
+            echo "  [OK]  S3: editor-open.sh exits 3 when lock held; stderr mentions lock"
+        else
+            echo "  [FAIL] S3: expected exit 3 with 'held/lock' in stderr; got rc=$S3_RC"
+            cat "$S3_STDERR"
+            exit 1
+        fi
+    fi
+    (cd "$PLUGIN_DIR" && HOME="$ED_HOME" python3 -m lib.kroki_session.lock close) >/dev/null
+
+    # S4: headless refusal.
+    unset DISPLAY
+    unset WAYLAND_DISPLAY
+    S4_STDERR="$ED_SCRATCH/s4.stderr"
+    if "$PLUGIN_DIR/scripts/editor-open.sh" "$ED_FIXTURE" 2>"$S4_STDERR"; then
+        echo "  [FAIL] S4: editor-open.sh should have exited 1 when no display"
+        exit 1
+    else
+        S4_RC=$?
+        if [[ $S4_RC -eq 1 ]] && grep -qi "graphical" "$S4_STDERR" && [[ ! -f "$ED_LOCK" ]]; then
+            echo "  [OK]  S4: editor-open.sh exits 1 when headless; no lock written"
+        else
+            echo "  [FAIL] S4: expected exit 1 + 'graphical' stderr + no lock"
+            cat "$S4_STDERR"
+            exit 1
+        fi
+    fi
+    export DISPLAY=":99"
+
+    # S5: pod down refusal.
+    cat > "$ED_STUBS/pod-health.sh" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+    S5_STDERR="$ED_SCRATCH/s5.stderr"
+    if "$PLUGIN_DIR/scripts/editor-open.sh" "$ED_FIXTURE" 2>"$S5_STDERR"; then
+        echo "  [FAIL] S5: editor-open.sh should have exited 1 when pod down"
+        exit 1
+    else
+        S5_RC=$?
+        if [[ $S5_RC -eq 1 ]] && grep -qi "pod" "$S5_STDERR"; then
+            echo "  [OK]  S5: editor-open.sh exits 1 when pod down; stderr mentions pod"
+        else
+            echo "  [FAIL] S5: expected exit 1 + 'pod' in stderr"
+            cat "$S5_STDERR"
+            exit 1
+        fi
+    fi
+    cat > "$ED_STUBS/pod-health.sh" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+
+    # S6: missing source file.
+    S6_STDERR="$ED_SCRATCH/s6.stderr"
+    if "$PLUGIN_DIR/scripts/editor-open.sh" "$ED_SCRATCH/does-not-exist.puml" 2>"$S6_STDERR"; then
+        echo "  [FAIL] S6: editor-open.sh should have exited 1 for missing file"
+        exit 1
+    else
+        S6_RC=$?
+        if [[ $S6_RC -eq 1 ]] && grep -qi "not found" "$S6_STDERR"; then
+            echo "  [OK]  S6: editor-open.sh exits 1 for missing file"
+        else
+            echo "  [FAIL] S6: expected exit 1 + 'not found' stderr"
+            cat "$S6_STDERR"
+            exit 1
+        fi
+    fi
+
+    # S9: path with spaces.
+    ED_SPACED="$ED_SCRATCH/path with spaces.puml"
+    cp "$ED_FIXTURE" "$ED_SPACED"
+    "$PLUGIN_DIR/scripts/editor-open.sh" "$ED_SPACED" >/dev/null
+    if [[ -f "$ED_LOCK" ]] && python3 -c "import json,sys; d=json.load(open('$ED_LOCK')); sys.exit(0 if d['source_path'] == '$(realpath "$ED_SPACED")' else 1)"; then
+        echo "  [OK]  S9: editor-open.sh handles path with spaces correctly"
+    else
+        echo "  [FAIL] S9: lock source_path does not match spaced abspath"
+        cat "$ED_LOCK"
+        exit 1
+    fi
+    (cd "$PLUGIN_DIR" && HOME="$ED_HOME" python3 -m lib.kroki_session.lock close) >/dev/null
+
+    # Restore environment.
+    if [[ "$SAVED_HOME" != "" ]]; then export HOME="$SAVED_HOME"; else unset HOME; fi
+    export PATH="$SAVED_PATH"
+    if [[ "$SAVED_DISPLAY" == "__unset__" ]]; then unset DISPLAY; else export DISPLAY="$SAVED_DISPLAY"; fi
+    if [[ "$SAVED_WAYLAND" == "__unset__" ]]; then unset WAYLAND_DISPLAY; else export WAYLAND_DISPLAY="$SAVED_WAYLAND"; fi
 fi
 
 # Python unit tests (Plan 2)
