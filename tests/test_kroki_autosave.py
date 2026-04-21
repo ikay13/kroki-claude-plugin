@@ -502,3 +502,61 @@ class TestRestoreCLI:
             env={**os.environ, "KROKI_STATE_DIR": str(tmp_path)},
         )
         assert result.returncode != 0  # error exit
+
+
+class TestPruneCLI:
+    def test_prune_dry_run_lists_without_deleting(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        old = proj / "foo.20260410T000000Z.puml"
+        old.write_text("a")
+        now = datetime.now(timezone.utc).timestamp()
+        os.utime(old, (now - 30 * 86400, now - 30 * 86400))  # 30 days old
+
+        result = subprocess.run(
+            [sys.executable, "-m", "lib.kroki_autosave.restore",
+             "prune", "--dry-run"],
+            capture_output=True, text=True,
+            env={**os.environ, "KROKI_STATE_DIR": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert "foo.20260410T000000Z.puml" in result.stdout
+        assert old.exists()  # NOT deleted in dry-run
+
+    def test_prune_real_moves_to_trash(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        trash = tmp_path / "Trash"
+        trash.mkdir()
+        monkeypatch.setenv("KROKI_TRASH_DIR", str(trash))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        old = proj / "foo.20260410T000000Z.puml"
+        old.write_text("a")
+        now = datetime.now(timezone.utc).timestamp()
+        os.utime(old, (now - 30 * 86400, now - 30 * 86400))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "lib.kroki_autosave.restore", "prune"],
+            capture_output=True, text=True,
+            env={
+                **os.environ,
+                "KROKI_STATE_DIR": str(tmp_path),
+                "KROKI_TRASH_DIR": str(trash),
+            },
+        )
+        assert result.returncode == 0
+        assert not old.exists()
+        assert len(list(trash.iterdir())) == 1
+
+class TestStatusCLI:
+    def test_status_no_daemon(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        result = subprocess.run(
+            [sys.executable, "-m", "lib.kroki_autosave.restore", "status"],
+            capture_output=True, text=True,
+            env={**os.environ, "KROKI_STATE_DIR": str(tmp_path)},
+        )
+        # Exits 0 even with no daemon; reports "inactive" or similar
+        assert result.returncode == 0
+        assert "kroki-autosave.service" in result.stdout

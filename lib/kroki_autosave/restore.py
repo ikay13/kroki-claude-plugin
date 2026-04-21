@@ -198,6 +198,94 @@ def cmd_restore(args) -> int:
     return 0
 
 
+def cmd_prune(args) -> int:
+    cfg = common.load_config()
+    ttl_days = cfg["autosave"]["ttl_days"]
+    now_ts = datetime.now(timezone.utc).timestamp()
+    root = common.autosaves_root()
+    projects = [args.project] if args.project else [
+        d.name for d in sorted(root.iterdir()) if d.is_dir()
+    ]
+    total_pruned = 0
+    for project in projects:
+        proj_dir = root / project
+        prunable = common.find_prunable(proj_dir, ttl_days=ttl_days, now_ts=now_ts)
+        for path in prunable:
+            if args.dry_run:
+                print(f"(dry-run) would prune: {path}")
+            else:
+                dest = common.move_to_trash(path)
+                if dest is not None:
+                    print(f"pruned: {path} -> {dest}")
+                    total_pruned += 1
+    if not args.dry_run:
+        print(f"Total pruned: {total_pruned}")
+    return 0
+
+
+def cmd_status(args) -> int:
+    # systemctl check
+    svc_active = False
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "is-active", "kroki-autosave.service"],
+            capture_output=True, text=True, timeout=5,
+        )
+        svc_active = (r.returncode == 0 and r.stdout.strip() == "active")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    status_text = "active (running)" if svc_active else "inactive or unavailable"
+    print(f"kroki-autosave.service: {status_text}")
+
+    # divergence.json summary
+    div_path = common.autosaves_root() / "divergence.json"
+    if div_path.exists():
+        try:
+            rows = json.loads(div_path.read_text())
+            print(f"Divergence: {len(rows)} file(s) flagged")
+            for r in rows[:10]:
+                print(f"  {r.get('project')}/{Path(r.get('source_path','')).name}"
+                      f" — {r.get('status')} (last autosave {r.get('last_autosave_ts','n/a')})")
+        except Exception as e:
+            print(f"Divergence: (error reading divergence.json: {e})")
+    else:
+        print("Divergence: (divergence.json absent; daemon has not run a cycle)")
+
+    # Autosaves summary
+    root = common.autosaves_root()
+    total_files = 0
+    total_bytes = 0
+    projects = []
+    if root.exists():
+        for proj_dir in sorted(root.iterdir()):
+            if proj_dir.is_dir():
+                projects.append(proj_dir.name)
+                for entry in proj_dir.iterdir():
+                    if entry.is_file():
+                        total_files += 1
+                        total_bytes += entry.stat().st_size
+    print(f"Projects: {len(projects)} ({', '.join(projects) if projects else 'none'})")
+    print(f"Autosaves: {total_files} entries, {total_bytes} bytes total")
+    return 0
+
+
+def cmd_reload(args) -> int:
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "kill", "-s", "HUP",
+             "kroki-autosave.service"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            print("SIGHUP sent to kroki-autosave.service")
+            return 0
+        print(f"error: systemctl kill failed: {r.stderr}", file=sys.stderr)
+        return 2
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="kroki-autosave")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -213,6 +301,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_restore.add_argument("--yes", action="store_true",
                            help="non-interactive; skip confirmation")
     p_restore.set_defaults(func=cmd_restore)
+
+    p_prune = sub.add_parser("prune", help="manual prune (honors ttl_days)")
+    p_prune.add_argument("--project", default=None)
+    p_prune.add_argument("--dry-run", action="store_true")
+    p_prune.set_defaults(func=cmd_prune)
+
+    p_status = sub.add_parser("status", help="daemon + divergence + autosaves summary")
+    p_status.set_defaults(func=cmd_status)
+
+    p_reload = sub.add_parser("reload", help="SIGHUP the running daemon")
+    p_reload.set_defaults(func=cmd_reload)
 
     return p
 
