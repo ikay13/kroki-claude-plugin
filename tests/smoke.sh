@@ -413,6 +413,128 @@ STUB
     if [[ "$SAVED_WAYLAND" == "__unset__" ]]; then unset WAYLAND_DISPLAY; else export WAYLAND_DISPLAY="$SAVED_WAYLAND"; fi
 fi
 
+# --- Plan 5c render-gate smoke tests (Task 12) ---
+if $FULL_MODE; then
+    echo ""
+    echo "=== render-gate editor-lock integration (Task 12) ==="
+
+    RG_SCRATCH=$(mktemp -d /tmp/kroki-render-gate-XXXXXX)
+    # Extend existing cleanup to cover this scratch dir.
+    RG_HOME="$RG_SCRATCH/home"
+    mkdir -p "$RG_HOME/.kroki-plugin"
+
+    # Capture real KROKI_CLI before we replace HOME.
+    # render.sh derives KROKI_CLI from $HOME/go/bin/kroki, and the kroki CLI
+    # reads $HOME/kroki.yml for server endpoint — copy it into RG_HOME so the
+    # CLI uses the local pod when HOME is redirected.
+    RG_REAL_KROKI_CLI="${KROKI_CLI:-$HOME/go/bin/kroki}"
+    [[ -f "$HOME/kroki.yml" ]] && cp "$HOME/kroki.yml" "$RG_HOME/kroki.yml"
+
+    RG_SAVED_HOME="${HOME-}"
+    export HOME="$RG_HOME"
+
+    RG_LOCK="$RG_HOME/.kroki-plugin/.active-editor.lock"
+    RG_SRC="$RG_SCRATCH/gate-test.puml"
+    RG_OTHER="$RG_SCRATCH/other-test.puml"
+    cat > "$RG_SRC" <<'PUML'
+@startuml
+A -> B
+@enduml
+PUML
+    cp "$RG_SRC" "$RG_OTHER"
+
+    RG_LOCK_PY="$PLUGIN_DIR/lib/kroki_session/lock.py"
+    RG_LOCK_PY_MOVED="$RG_SCRATCH/lock.py.renamed"
+
+    # R1: no lock file; temporarily rename lock.py away to prove fast path doesn't import it.
+    rm -f "$RG_LOCK"
+    mv "$RG_LOCK_PY" "$RG_LOCK_PY_MOVED"
+    R1_OUT="$RG_SCRATCH/r1.out"
+    if KROKI_CLI="$RG_REAL_KROKI_CLI" "$PLUGIN_DIR/scripts/render.sh" "$RG_SRC" --out "$RG_SCRATCH" --type plantuml --mode single >"$R1_OUT" 2>&1; then
+        mv "$RG_LOCK_PY_MOVED" "$RG_LOCK_PY"
+        if [[ -s "$RG_SCRATCH/gate-test.svg" ]]; then
+            echo "  [OK]  R1: render.sh succeeds with no lock file even when lock.py missing (fast path)"
+        else
+            echo "  [FAIL] R1: render exited 0 but no output file"
+            cat "$R1_OUT"
+            exit 1
+        fi
+    else
+        R1_RC=$?
+        mv "$RG_LOCK_PY_MOVED" "$RG_LOCK_PY"
+        echo "  [FAIL] R1: render.sh failed (rc=$R1_RC) with no lock file — short-circuit broken?"
+        cat "$R1_OUT"
+        exit 1
+    fi
+    rm -f "$RG_SCRATCH/gate-test.svg"
+
+    # Set up a lock on $RG_SRC for R2/R3.
+    python3 -c "import json; from datetime import datetime, timezone; open('$RG_LOCK','w').write(json.dumps({'source_path': '$(realpath "$RG_SRC")', 'started_at': datetime.now(timezone.utc).isoformat()}))"
+
+    # R2: render OTHER source while lock holds $RG_SRC → succeeds.
+    mkdir -p "$RG_SCRATCH/r2out"
+    R2_OUT="$RG_SCRATCH/r2.out"
+    if KROKI_CLI="$RG_REAL_KROKI_CLI" "$PLUGIN_DIR/scripts/render.sh" "$RG_OTHER" --out "$RG_SCRATCH/r2out" --type plantuml --mode single >"$R2_OUT" 2>&1; then
+        if [[ -s "$RG_SCRATCH/r2out/other-test.svg" ]]; then
+            echo "  [OK]  R2: render.sh succeeds on other source while lock holds another file"
+        else
+            echo "  [FAIL] R2: render exited 0 but no output"
+            cat "$R2_OUT"
+            exit 1
+        fi
+    else
+        R2_RC=$?
+        echo "  [FAIL] R2: render.sh exited $R2_RC on a non-locked file"
+        cat "$R2_OUT"
+        exit 1
+    fi
+
+    # R3: render LOCKED source → exit 2.
+    R3_OUT="$RG_SCRATCH/r3.out"
+    if KROKI_CLI="$RG_REAL_KROKI_CLI" "$PLUGIN_DIR/scripts/render.sh" "$RG_SRC" --out "$RG_SCRATCH" --type plantuml --mode single >"$R3_OUT" 2>&1; then
+        echo "  [FAIL] R3: render.sh succeeded when locked-on-target (should have exited 2)"
+        cat "$R3_OUT"
+        exit 1
+    else
+        R3_RC=$?
+        if [[ $R3_RC -eq 2 ]] && grep -qi "editor-close.sh" "$R3_OUT" && [[ ! -f "$RG_SCRATCH/gate-test.svg" ]]; then
+            echo "  [OK]  R3: render.sh exits 2 when lock matches source; stderr suggests editor-close.sh"
+        else
+            echo "  [FAIL] R3: expected exit 2 + editor-close.sh mention + no output file; got rc=$R3_RC"
+            cat "$R3_OUT"
+            ls -la "$RG_SCRATCH"
+            exit 1
+        fi
+    fi
+
+    # R4: lock present + lock.py broken → fail-closed (exit 2).
+    mv "$RG_LOCK_PY" "$RG_LOCK_PY_MOVED"
+    R4_OUT="$RG_SCRATCH/r4.out"
+    if KROKI_CLI="$RG_REAL_KROKI_CLI" "$PLUGIN_DIR/scripts/render.sh" "$RG_SRC" --out "$RG_SCRATCH" --type plantuml --mode single >"$R4_OUT" 2>&1; then
+        mv "$RG_LOCK_PY_MOVED" "$RG_LOCK_PY"
+        echo "  [FAIL] R4: render.sh succeeded with lock present + lock.py broken (fail-open, should be fail-closed)"
+        cat "$R4_OUT"
+        exit 1
+    else
+        R4_RC=$?
+        mv "$RG_LOCK_PY_MOVED" "$RG_LOCK_PY"
+        if [[ $R4_RC -eq 2 ]] && grep -qi "Trash" "$R4_OUT" && [[ ! -f "$RG_SCRATCH/gate-test.svg" ]]; then
+            echo "  [OK]  R4: render.sh fail-closed (exit 2) when lock present + lock.py broken; stderr mentions Trash"
+        else
+            echo "  [FAIL] R4: expected exit 2 + Trash recovery mention + no output; got rc=$R4_RC"
+            cat "$R4_OUT"
+            exit 1
+        fi
+    fi
+
+    # Clean up lock + scratch.
+    rm -f "$RG_LOCK"
+    rm -rf "$RG_SCRATCH"
+
+    # Restore HOME.
+    if [[ "$RG_SAVED_HOME" != "" ]]; then export HOME="$RG_SAVED_HOME"; else unset HOME; fi
+fi
+
 # Python unit tests (Plan 2)
 if command -v python3 >/dev/null 2>&1; then
     echo ""
