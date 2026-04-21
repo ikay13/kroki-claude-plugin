@@ -1,0 +1,16 @@
+# ~/.kroki-plugin/config.yml — optional override file
+#
+# Copy this file to ~/.kroki-plugin/config.yml and uncomment keys to override.
+# Defaults are identical to the values below; absent keys use defaults.
+
+watchdog:
+  enabled: true         # set false to disable the watchdog entirely
+  tier1_hours: 2        # idle hours before notification
+  tier2_hours: 6        # idle hours before auto-stop
+
+version_check:
+  enabled: true         # set false to disable version-check cycles
+  cli_path: ~/go/bin/kroki
+
+a11y:
+  skip_all: false       # reserved per plugin design §13; not wired by Plan 5b
