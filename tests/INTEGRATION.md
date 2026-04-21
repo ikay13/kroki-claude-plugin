@@ -230,6 +230,45 @@ unlocked once Plan 5 ships.
 
 **Pass:** new marker present, old marker absent, no duplicate blocks.
 
+---
+
+## Scenario 16 — Editor-lock happy path (Plan 5c)
+
+**Prerequisites:** kroki pod running, Niolesk accessible at `http://localhost:8017`, a local browser available.
+
+**Steps:**
+
+1. Choose a real `.puml` file in your diagrams directory, e.g. `diagrams/arch-foo.puml`.
+2. Open it via: `scripts/editor-open.sh diagrams/arch-foo.puml`
+   Expect: Niolesk opens in your browser with the source pre-loaded; terminal prints a usage reminder; `~/.kroki-plugin/.active-editor.lock` exists with `source_path` set to the realpath of `diagrams/arch-foo.puml`.
+3. Make a visible edit in Niolesk (change an arrow label, add a participant).
+4. Click **Download** in Niolesk — the file saves to `~/Downloads/arch-foo.puml`.
+5. Move it back: `mv ~/Downloads/arch-foo.puml diagrams/arch-foo.puml`
+6. Close: `scripts/editor-close.sh`
+   Expect: terminal prints "Lock released." plus the save-back reminder; `~/.kroki-plugin/.active-editor.lock` is gone.
+7. Verify the source file contains your edit.
+
+**Pass criteria:** lock appeared and cleared; Niolesk pre-loaded correctly; file contains the edit you made.
+
+---
+
+## Scenario 17 — Render blocks during edit (Plan 5c)
+
+**Prerequisites:** kroki pod running.
+
+**Steps:**
+
+1. In terminal A: `scripts/editor-open.sh diagrams/arch-foo.puml`
+2. In terminal B: `scripts/render.sh diagrams/arch-foo.puml`
+   Expect: exit code 2; stderr mentions "editor lock active" and "`editor-close.sh`"; no new `.svg` file written.
+3. In terminal B, try a DIFFERENT source: `scripts/render.sh diagrams/arch-bar.puml`
+   Expect: exit 0; output `.svg` is written normally (the lock doesn't block other files).
+4. In terminal A: `scripts/editor-close.sh`
+5. In terminal B, retry: `scripts/render.sh diagrams/arch-foo.puml`
+   Expect: exit 0; output `.svg` is written.
+
+**Pass criteria:** step 2 exits 2 with guidance; step 3 succeeds; step 5 succeeds after close.
+
 ## Pass criteria
 
 All scenarios except #3 must PASS before tagging a release. #3 stays marked
