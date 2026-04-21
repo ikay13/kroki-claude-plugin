@@ -1,0 +1,15 @@
+[Unit]
+Description=Kroki Plugin Autosave Daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/kroki-claude-plugin/scripts/autosave-daemon.sh
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=600
+StartLimitBurst=5
+OnFailure=kroki-autosave-failed.service
+
+[Install]
+WantedBy=default.target

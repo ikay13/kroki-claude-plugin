@@ -1,0 +1,7 @@
+[Unit]
+Description=Notify user when kroki-autosave fails too many times
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/notify-send "kroki-autosave DAEMON FAILED" \
+  "Service restarted too many times. See: journalctl --user -u kroki-autosave"
