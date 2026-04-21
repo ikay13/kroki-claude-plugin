@@ -150,3 +150,70 @@ def load_config() -> Dict:
         logger.warning("load_config: bad config.yml (%s) — using defaults", e)
         return json.loads(json.dumps(DEFAULT_CONFIG))
     return _deep_merge_defaults(parsed, DEFAULT_CONFIG)
+
+
+def infer_project_from_path(source_path: Path, vault_path: Path) -> str:
+    """Given a source file path and the vault root, return the project name
+    (directory between vault_path and source_path). Raises ValueError if
+    source_path is not inside vault_path/<project>/{diagrams,sessions}/."""
+    source_path = Path(source_path).resolve()
+    vault_path = Path(vault_path).resolve()
+    try:
+        rel = source_path.relative_to(vault_path)
+    except ValueError as e:
+        raise ValueError(f"path {source_path} not under vault {vault_path}") from e
+    parts = rel.parts
+    if len(parts) < 3 or parts[1] not in ("diagrams", "sessions"):
+        raise ValueError(
+            f"path {source_path} not under <vault>/<project>/{{diagrams,sessions}}/"
+        )
+    return parts[0]
+
+
+def discover_projects(vault_path: Path) -> Tuple[List[str], List[Path]]:
+    """Glob <vault_path>/*/diagrams/ and */sessions/; return (projects, watch_dirs).
+    Skips projects with a `.no-autosave` marker file at their root. Returns
+    ([], []) if vault_path doesn't exist."""
+    vault_path = Path(vault_path)
+    if not vault_path.is_dir():
+        return [], []
+    projects_set = set()
+    watch_dirs: List[Path] = []
+    for project_dir in sorted(vault_path.iterdir()):
+        if not project_dir.is_dir():
+            continue
+        if (project_dir / ".no-autosave").exists():
+            logger.info("discover_projects: skipping %s (.no-autosave)", project_dir.name)
+            continue
+        has_any = False
+        for sub in ("diagrams", "sessions"):
+            d = project_dir / sub
+            if d.is_dir():
+                watch_dirs.append(d)
+                has_any = True
+        if has_any:
+            projects_set.add(project_dir.name)
+    return sorted(projects_set), watch_dirs
+
+
+def notify_and_log(title: str, body: str) -> None:
+    """Fire notify-send (best-effort) and append to notifications.log."""
+    # Log first — guarantees audit trail even if notify-send is unavailable
+    log_path = state_dir() / "notifications.log"
+    try:
+        state_dir().mkdir(parents=True, exist_ok=True)
+        with log_path.open("a") as fh:
+            ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            fh.write(f"{ts} kroki-autosave {title} — {body}\n")
+    except Exception as e:
+        logger.warning("notify_and_log: log write failed: %s", e)
+
+    try:
+        subprocess.run(
+            ["notify-send", title, body],
+            check=False, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        logger.info("notify_and_log: notify-send unavailable (%s) — logged only", e)
+    except Exception as e:
+        logger.warning("notify_and_log: notify-send failed: %s", e)
