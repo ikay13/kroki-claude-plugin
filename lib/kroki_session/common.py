@@ -539,3 +539,8 @@ def parse_index_summary(path: Path) -> list[ReferenceEntry]:
                 "last_updated": m.group("date"),
             })
     return entries
+
+
+# Re-export editor-lock check so end.py and other in-package consumers have a
+# single import surface.
+from lib.kroki_session.lock import check_editor_lock, LockCheckResult  # noqa: E402, F401

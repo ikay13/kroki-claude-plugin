@@ -1392,3 +1392,8 @@ class TestLock:
         self._run_cli(monkeypatch, lock_path, "open")  # blank
         p4 = self._run_cli(monkeypatch, lock_path, "check", "--source", "/anything.puml")
         assert p4.returncode == 0
+
+    def test_common_reexports_check_editor_lock(self):
+        """check_editor_lock is importable from common."""
+        from lib.kroki_session import common, lock
+        assert common.check_editor_lock is lock.check_editor_lock
