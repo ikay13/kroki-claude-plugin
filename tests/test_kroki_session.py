@@ -1034,3 +1034,51 @@ class TestLock:
         assert hasattr(lock, "LockCheckResult")
         assert hasattr(lock, "LockHeldError")
         assert issubclass(lock.LockHeldError, Exception)
+
+    def test_clear_lock_idempotent(self, tmp_path, monkeypatch):
+        """U10 — clear_lock returns False when no lock, True when removed."""
+        from lib.kroki_session import lock
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+
+        assert lock.clear_lock() is False  # absent
+        lock_path.write_text('{"source_path": null, "started_at": "2026-04-21T00:00:00Z"}')
+        assert lock.clear_lock() is True   # present → removed
+        assert not lock_path.exists()
+        assert lock.clear_lock() is False  # idempotent second call
+
+    def test_is_stale_boundary(self, monkeypatch):
+        """U11 — is_stale true at >2h, false at <=2h. Monkeypatched now()."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone, timedelta
+
+        fixed_now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
+
+        class FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+        monkeypatch.setattr(lock, "datetime", FrozenDatetime)
+
+        stale_ts = (fixed_now - timedelta(hours=2, seconds=1)).isoformat()
+        fresh_ts = (fixed_now - timedelta(hours=2) + timedelta(seconds=1)).isoformat()
+
+        assert lock.is_stale({"started_at": stale_ts, "source_path": None}) is True
+        assert lock.is_stale({"started_at": fresh_ts, "source_path": None}) is False
+
+    def test_is_stale_future_timestamp_not_stale(self, monkeypatch):
+        """Extension of U11 — clock-skewed future timestamps are treated as fresh."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone, timedelta
+
+        fixed_now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
+
+        class FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+        monkeypatch.setattr(lock, "datetime", FrozenDatetime)
+        future_ts = (fixed_now + timedelta(hours=1)).isoformat()
+        assert lock.is_stale({"started_at": future_ts, "source_path": None}) is False

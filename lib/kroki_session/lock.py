@@ -50,11 +50,23 @@ def read_lock() -> Optional[dict]:
 
 
 def clear_lock() -> bool:
-    raise NotImplementedError
+    try:
+        os.unlink(LOCK_PATH)
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def is_stale(lock_dict: dict) -> bool:
-    raise NotImplementedError
+    started_at_str = lock_dict.get("started_at")
+    if not started_at_str:
+        return True  # Missing key → treat as stale (defensive)
+    started_at = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    age_seconds = (now - started_at).total_seconds()
+    return age_seconds >= STALE_THRESHOLD_SECONDS  # Negative age (future) → False
 
 
 def check_editor_lock(source_path: str) -> LockCheckResult:
