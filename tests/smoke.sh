@@ -776,6 +776,97 @@ unset KROKI_STATE_DIR
 cleanup_u_block
 trap - EXIT
 
+# ============================================================================
+# Plan 5d — Autosave smoke tests (AS block)
+# ============================================================================
+
+echo ""
+echo "=== Plan 5d: autosave smoke ==="
+
+# Set up an isolated state dir + vault for smoke tests
+SMOKE_TEST_VAULT=$(mktemp -d)
+SMOKE_TEST_STATE=$(mktemp -d)
+trap "rm -rf $SMOKE_TEST_VAULT $SMOKE_TEST_STATE" EXIT
+
+mkdir -p "$SMOKE_TEST_VAULT/Kroki-Plugin/diagrams"
+mkdir -p "$SMOKE_TEST_VAULT/Kroki-Plugin/sessions"
+
+# Write an isolated config.yml pointing at the smoke vault
+mkdir -p "$SMOKE_TEST_STATE"
+cat > "$SMOKE_TEST_STATE/config.yml" <<EOF
+autosave:
+  vault_path: $SMOKE_TEST_VAULT
+  debounce_seconds: 1
+  ttl_days: 7
+EOF
+
+# Start daemon in background (inherit the smoke env)
+export KROKI_STATE_DIR="$SMOKE_TEST_STATE"
+PYTHONPATH="$PLUGIN_DIR" python3 -m lib.kroki_autosave.daemon &
+DAEMON_PID=$!
+sleep 2  # daemon must complete startup + watch setup
+
+# AS1: daemon is running
+echo "AS1: daemon is alive"
+if kill -0 $DAEMON_PID 2>/dev/null; then
+    echo "  PASS"; pass=$((pass+1))
+else
+    echo "  FAIL: daemon died"; fail=$((fail+1))
+fi
+
+# AS2: close_write stages a copy
+echo "AS2: close_write stages an autosave"
+echo "content-1" > "$SMOKE_TEST_VAULT/Kroki-Plugin/diagrams/smoke-test.puml"
+sleep 3  # debounce + daemon latency
+if ls "$SMOKE_TEST_STATE/autosaves/Kroki-Plugin/smoke-test."*.puml >/dev/null 2>&1; then
+    echo "  PASS"; pass=$((pass+1))
+else
+    echo "  FAIL: no autosave staged"; fail=$((fail+1))
+fi
+
+# AS3: prune moves expired autosave to Trash
+echo "AS3: prune moves 8d-old autosave"
+OLD=$(ls "$SMOKE_TEST_STATE/autosaves/Kroki-Plugin/"*.puml | head -1)
+touch -d '8 days ago' "$OLD"
+# Trigger rescan via SIGHUP (prune sweeps on each cycle)
+kill -HUP $DAEMON_PID
+sleep 70  # next periodic cycle (60s + slack)
+if [[ ! -e "$OLD" ]]; then
+    echo "  PASS"; pass=$((pass+1))
+else
+    echo "  FAIL: stale autosave not pruned"; fail=$((fail+1))
+fi
+
+# AS4: DELETE event triggers notification
+echo "AS4: notifications.log records DELETE"
+# Stage a new file then delete it
+echo "doomed" > "$SMOKE_TEST_VAULT/Kroki-Plugin/diagrams/doomed.puml"
+sleep 3
+rm "$SMOKE_TEST_VAULT/Kroki-Plugin/diagrams/doomed.puml"
+sleep 2
+if grep -q "doomed" "$SMOKE_TEST_STATE/notifications.log" 2>/dev/null; then
+    echo "  PASS"; pass=$((pass+1))
+else
+    echo "  FAIL: DELETE not logged"; fail=$((fail+1))
+fi
+
+# AS5: SIGHUP picks up new project
+echo "AS5: SIGHUP discovers new project"
+mkdir -p "$SMOKE_TEST_VAULT/NewProj/diagrams"
+kill -HUP $DAEMON_PID
+sleep 2
+echo "hello" > "$SMOKE_TEST_VAULT/NewProj/diagrams/intro.puml"
+sleep 3
+if ls "$SMOKE_TEST_STATE/autosaves/NewProj/intro."*.puml >/dev/null 2>&1; then
+    echo "  PASS"; pass=$((pass+1))
+else
+    echo "  FAIL: new project not picked up"; fail=$((fail+1))
+fi
+
+# Clean up daemon
+kill $DAEMON_PID 2>/dev/null || true
+wait $DAEMON_PID 2>/dev/null || true
+
 # Python unit tests (Plan 2)
 if command -v python3 >/dev/null 2>&1; then
     echo ""
