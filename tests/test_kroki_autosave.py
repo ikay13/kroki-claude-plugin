@@ -4,8 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import List
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -605,3 +607,59 @@ class TestPidfileLock:
         lock.acquire()  # should reclaim
         assert int(pidfile.read_text().strip()) == os.getpid()
         lock.release()
+
+
+class TestDebounce:
+    def test_single_event_fires_after_delay(self, tmp_path, monkeypatch):
+        from lib.kroki_autosave import daemon
+        fired: List[str] = []
+        deb = daemon.Debouncer(
+            delay_seconds=0.1,
+            on_fire=lambda path: fired.append(str(path)),
+        )
+        deb.enqueue(tmp_path / "a.puml")
+        time.sleep(0.2)
+        deb.stop()
+        assert fired == [str(tmp_path / "a.puml")]
+
+    def test_three_rapid_events_coalesce(self, tmp_path, monkeypatch):
+        from lib.kroki_autosave import daemon
+        fired: List[str] = []
+        deb = daemon.Debouncer(
+            delay_seconds=0.1,
+            on_fire=lambda path: fired.append(str(path)),
+        )
+        for _ in range(3):
+            deb.enqueue(tmp_path / "a.puml")
+            time.sleep(0.03)  # under delay
+        time.sleep(0.15)
+        deb.stop()
+        assert fired == [str(tmp_path / "a.puml")]  # coalesced to ONE fire
+
+    def test_independent_paths(self, tmp_path, monkeypatch):
+        from lib.kroki_autosave import daemon
+        fired: List[str] = []
+        deb = daemon.Debouncer(
+            delay_seconds=0.1,
+            on_fire=lambda path: fired.append(str(path)),
+        )
+        deb.enqueue(tmp_path / "a.puml")
+        deb.enqueue(tmp_path / "b.puml")
+        time.sleep(0.2)
+        deb.stop()
+        assert sorted(fired) == sorted([
+            str(tmp_path / "a.puml"),
+            str(tmp_path / "b.puml"),
+        ])
+
+    def test_flush_fires_pending(self, tmp_path, monkeypatch):
+        from lib.kroki_autosave import daemon
+        fired: List[str] = []
+        deb = daemon.Debouncer(
+            delay_seconds=60,  # long enough that it wouldn't fire naturally
+            on_fire=lambda path: fired.append(str(path)),
+        )
+        deb.enqueue(tmp_path / "a.puml")
+        deb.flush()
+        deb.stop()
+        assert fired == [str(tmp_path / "a.puml")]

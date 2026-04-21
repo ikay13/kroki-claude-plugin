@@ -105,3 +105,75 @@ class DaemonState:
     debouncers: Dict[str, "DebounceEntry"] = field(default_factory=dict)
     consecutive_stage_failures: int = 0
     degraded: bool = False
+
+
+# ============================================================================
+# Debounce logic
+# ============================================================================
+
+@dataclass
+class DebounceEntry:
+    timer: threading.Timer
+    last_enqueue_ts: float
+
+
+class Debouncer:
+    """Coalesce rapid events per-path within a rolling window.
+
+    Semantics:
+      - First enqueue: schedule callback at now + delay.
+      - Subsequent enqueue within window: reset timer to new_now + delay.
+      - Window expires: fire callback once with the path (callback reads
+        latest content itself).
+
+    Implementation: one threading.Timer per path. Cheap; threads die after fire."""
+
+    def __init__(self, delay_seconds: float, on_fire: Callable[[Path], None]):
+        self.delay = delay_seconds
+        self.on_fire = on_fire
+        self._entries: Dict[str, DebounceEntry] = {}
+        self._lock = threading.Lock()
+        self._stopped = False
+
+    def enqueue(self, path: Path) -> None:
+        key = str(path)
+        with self._lock:
+            if self._stopped:
+                return
+            entry = self._entries.get(key)
+            if entry is not None:
+                entry.timer.cancel()
+            timer = threading.Timer(self.delay, self._fire, args=(path,))
+            timer.daemon = True
+            timer.start()
+            self._entries[key] = DebounceEntry(
+                timer=timer, last_enqueue_ts=time.time(),
+            )
+
+    def _fire(self, path: Path) -> None:
+        with self._lock:
+            self._entries.pop(str(path), None)
+        try:
+            self.on_fire(path)
+        except Exception as e:
+            logger.exception("Debouncer: on_fire raised: %s", e)
+
+    def flush(self) -> None:
+        """Cancel all pending timers and fire each synchronously."""
+        with self._lock:
+            paths = [Path(k) for k in self._entries.keys()]
+            for entry in self._entries.values():
+                entry.timer.cancel()
+            self._entries.clear()
+        for p in paths:
+            try:
+                self.on_fire(p)
+            except Exception as e:
+                logger.exception("Debouncer.flush: on_fire raised: %s", e)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped = True
+            for entry in self._entries.values():
+                entry.timer.cancel()
+            self._entries.clear()
