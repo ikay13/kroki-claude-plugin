@@ -309,3 +309,137 @@ class DeleteHandler:
             with log_path.open("a") as fh:
                 ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 fh.write(f"{ts} kroki-autosave DELETE {source_path} last_autosave={last_ts}\n")
+
+
+# ============================================================================
+# Divergence cycle + divergence.json writer
+# ============================================================================
+
+@dataclass
+class DivergenceCycle:
+    vault_path: Path
+    stale_threshold_seconds: int
+    project_lookup: Callable[[Path], str]
+
+    def compute_all(self, projects: List[str], watch_dirs: List[Path]) -> List[Dict]:
+        """Walk each watched dir, compute source-vs-autosave divergence,
+        return list of entries (only DIVERGED and SOURCE_MISSING)."""
+        now_ts = time.time()
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        out: List[Dict] = []
+        proj_root = common.autosaves_root()
+
+        # 1. For each source in watched dirs
+        seen_sources: Set[str] = set()
+        for d in watch_dirs:
+            if not d.is_dir():
+                continue
+            for src in d.iterdir():
+                if not src.is_file():
+                    continue
+                if common.should_skip(src):
+                    continue
+                seen_sources.add(str(src.resolve()))
+                try:
+                    project = self.project_lookup(src)
+                except ValueError:
+                    continue
+                basename = src.stem
+                # Find the newest autosave for this basename
+                latest = _latest_autosave(proj_root / project, basename)
+                source_hash = common.hash_file(src)
+                if latest is None:
+                    continue  # NO_HISTORY — not emitted
+                auto_hash = common.hash_file(latest)
+                age = now_ts - latest.stat().st_mtime
+                try:
+                    _, auto_ts, _ = common.parse_autosave_filename(latest.name)
+                except ValueError:
+                    auto_ts = ""
+                status = common.classify(
+                    source_exists=True, source_hash=source_hash,
+                    autosave_exists=True, autosave_hash=auto_hash,
+                    autosave_age_seconds=age,
+                    stale_threshold_seconds=self.stale_threshold_seconds,
+                )
+                if status != common.Status.DIVERGED:
+                    continue
+                out.append({
+                    "project": project,
+                    "source_path": str(src.resolve()),
+                    "last_autosave_ts": auto_ts,
+                    "last_autosave_hash": auto_hash,
+                    "current_hash": source_hash,
+                    "status": "diverged",
+                    "checked_at": now_iso,
+                })
+
+        # 2. For each project, check for orphans (autosave exists but source gone)
+        for project in projects:
+            proj_dir = proj_root / project
+            if not proj_dir.is_dir():
+                continue
+            # Collect distinct basenames seen in staging
+            staged_basenames: Set[str] = set()
+            for entry in proj_dir.iterdir():
+                try:
+                    b, _, _ = common.parse_autosave_filename(entry.name)
+                    staged_basenames.add(b)
+                except ValueError:
+                    continue
+            # For each staged basename, check if corresponding source exists
+            for basename in staged_basenames:
+                # A staged basename has a matching source iff there's a watch_dir
+                # under this project containing <basename>.<ext>. Simpler:
+                # if no seen_sources in this project ended with <basename>.<ext>.
+                project_dirs = [
+                    d for d in watch_dirs
+                    if str(d).startswith(str(self.vault_path / project))
+                ]
+                found = False
+                for wd in project_dirs:
+                    for src in wd.iterdir() if wd.is_dir() else []:
+                        if src.stem == basename and src.is_file():
+                            found = True
+                            break
+                    if found:
+                        break
+                if not found:
+                    # Emit source_missing
+                    latest = _latest_autosave(proj_dir, basename)
+                    if latest is None:
+                        continue
+                    _, auto_ts, _ = common.parse_autosave_filename(latest.name)
+                    out.append({
+                        "project": project,
+                        "source_path": f"(missing) basename={basename}",
+                        "last_autosave_ts": auto_ts,
+                        "last_autosave_hash": common.hash_file(latest),
+                        "current_hash": None,
+                        "status": "source_missing",
+                        "checked_at": now_iso,
+                    })
+        return out
+
+
+def _latest_autosave(proj_dir: Path, basename: str) -> Optional[Path]:
+    if not proj_dir.is_dir():
+        return None
+    matches: List[Path] = []
+    for entry in proj_dir.iterdir():
+        try:
+            b, _, _ = common.parse_autosave_filename(entry.name)
+            if b == basename:
+                matches.append(entry)
+        except ValueError:
+            continue
+    if not matches:
+        return None
+    # Latest by filename (ISO compact sorts correctly)
+    return max(matches, key=lambda p: p.name)
+
+
+def write_divergence_json(entries: List[Dict]) -> None:
+    """Atomically write divergence.json at ~/.kroki-plugin/autosaves/."""
+    path = common.autosaves_root() / "divergence.json"
+    common.atomic_write(path, json.dumps(entries, indent=2))

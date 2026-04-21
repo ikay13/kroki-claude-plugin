@@ -858,3 +858,109 @@ class TestDeleteHandler:
         handler.handle_delete(src)
         # notify-send not invoked
         assert all(a[0][0] != "notify-send" for a in calls)
+
+
+class TestDivergenceJsonIO:
+    def test_writes_only_diverged_and_source_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("NEW_CONTENT")
+
+        proj_stage = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj_stage.mkdir(parents=True)
+        # Old autosave with DIFFERENT content → diverged (age > stale_threshold=60)
+        stale = proj_stage / "arch.20260401T000000Z.puml"
+        stale.write_text("OLD_CONTENT")
+        now = time.time()
+        os.utime(stale, (now - 3600, now - 3600))  # 1 hour old
+
+        from lib.kroki_autosave import daemon, common
+        cycle = daemon.DivergenceCycle(
+            vault_path=vault,
+            stale_threshold_seconds=60,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        entries = cycle.compute_all(projects=["Kroki-Plugin"],
+                                    watch_dirs=[vault / "Kroki-Plugin" / "diagrams"])
+        assert len(entries) == 1
+        assert entries[0]["status"] == "diverged"
+        assert entries[0]["project"] == "Kroki-Plugin"
+
+    def test_matches_not_emitted(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("SAME")
+
+        proj_stage = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj_stage.mkdir(parents=True)
+        stage = proj_stage / "arch.20260421T120000Z.puml"
+        stage.write_text("SAME")  # identical content
+
+        from lib.kroki_autosave import daemon, common
+        cycle = daemon.DivergenceCycle(
+            vault_path=vault,
+            stale_threshold_seconds=60,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        entries = cycle.compute_all(projects=["Kroki-Plugin"],
+                                    watch_dirs=[vault / "Kroki-Plugin" / "diagrams"])
+        assert entries == []  # matching hashes are suppressed
+
+    def test_in_flight_not_emitted(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("NEW")
+
+        proj_stage = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj_stage.mkdir(parents=True)
+        fresh = proj_stage / "arch.20260421T120000Z.puml"
+        fresh.write_text("OLD")
+        # Very fresh autosave (mtime = now) → IN_FLIGHT at 60s threshold
+        from lib.kroki_autosave import daemon, common
+        cycle = daemon.DivergenceCycle(
+            vault_path=vault,
+            stale_threshold_seconds=60,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        entries = cycle.compute_all(projects=["Kroki-Plugin"],
+                                    watch_dirs=[vault / "Kroki-Plugin" / "diagrams"])
+        assert entries == []
+
+    def test_source_missing_emitted(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        (vault / "Kroki-Plugin" / "diagrams").mkdir(parents=True)
+        # No source file; only an autosave exists
+        proj_stage = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj_stage.mkdir(parents=True)
+        (proj_stage / "gone.20260421T120000Z.puml").write_text("ghost")
+
+        from lib.kroki_autosave import daemon, common
+        cycle = daemon.DivergenceCycle(
+            vault_path=vault,
+            stale_threshold_seconds=60,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        entries = cycle.compute_all(projects=["Kroki-Plugin"],
+                                    watch_dirs=[vault / "Kroki-Plugin" / "diagrams"])
+        assert any(e["status"] == "source_missing" for e in entries)
+
+    def test_atomic_write_divergence_json(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_autosave import daemon
+        # Write twice in quick succession — no .tmp leftover
+        daemon.write_divergence_json([{"project": "X", "source_path": "/x", "status": "diverged",
+                                       "last_autosave_ts": "t", "last_autosave_hash": "h",
+                                       "current_hash": "c", "checked_at": "2026-04-21T00:00:00Z"}])
+        daemon.write_divergence_json([])
+        div = tmp_path / "autosaves" / "divergence.json"
+        assert div.exists()
+        assert json.loads(div.read_text()) == []
+        # No stale tmp file
+        assert not (tmp_path / "autosaves" / "divergence.json.tmp").exists()
