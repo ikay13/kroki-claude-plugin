@@ -345,3 +345,105 @@ class TestPruneTTL:
         r2 = common.move_to_trash(f2)
         assert r1 != r2
         assert r2.name.startswith("victim.puml.autosave-trash-")
+
+
+class TestRestoreSelection:
+    def test_list_empty_project(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_autosave import restore
+        rows = restore.list_autosaves(project="Kroki-Plugin")
+        assert rows == []
+
+    def test_list_single_entry(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        (proj / "arch.20260421T130815Z.puml").write_text("content")
+        from lib.kroki_autosave import restore
+        rows = restore.list_autosaves(project="Kroki-Plugin")
+        assert len(rows) == 1
+        assert rows[0]["basename"] == "arch"
+        assert rows[0]["ts"] == "20260421T130815Z"
+        assert rows[0]["ext"] == ".puml"
+        assert rows[0]["bytes"] == len("content")
+        assert rows[0]["lines"] == 1
+        assert len(rows[0]["hash"]) == 12
+
+    def test_list_sorted_descending(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        (proj / "arch.20260421T120000Z.puml").write_text("a")
+        (proj / "arch.20260421T130000Z.puml").write_text("b")
+        (proj / "arch.20260421T140000Z.puml").write_text("c")
+        from lib.kroki_autosave import restore
+        rows = restore.list_autosaves(project="Kroki-Plugin", basename="arch")
+        timestamps = [r["ts"] for r in rows]
+        assert timestamps == sorted(timestamps, reverse=True)
+
+    def test_list_filter_by_basename(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        (proj / "foo.20260421T120000Z.puml").write_text("x")
+        (proj / "bar.20260421T120000Z.puml").write_text("y")
+        from lib.kroki_autosave import restore
+        rows_all = restore.list_autosaves(project="Kroki-Plugin")
+        rows_foo = restore.list_autosaves(project="Kroki-Plugin", basename="foo")
+        assert len(rows_all) == 2
+        assert len(rows_foo) == 1
+        assert rows_foo[0]["basename"] == "foo"
+
+    def test_select_most_recent_no_spec(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        (proj / "foo.20260421T120000Z.puml").write_text("old")
+        (proj / "foo.20260421T130000Z.puml").write_text("new")
+        from lib.kroki_autosave import restore
+        row = restore.select_version(project="Kroki-Plugin", basename="foo")
+        assert row["ts"] == "20260421T130000Z"
+
+    def test_select_by_timestamp_exact(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        (proj / "foo.20260421T120000Z.puml").write_text("a")
+        (proj / "foo.20260421T130000Z.puml").write_text("b")
+        from lib.kroki_autosave import restore
+        row = restore.select_version(
+            project="Kroki-Plugin", basename="foo",
+            spec="20260421T120000Z",
+        )
+        assert row["ts"] == "20260421T120000Z"
+
+    def test_select_by_hash_prefix_unique(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        (proj / "foo.20260421T120000Z.puml").write_text("alpha")
+        (proj / "foo.20260421T130000Z.puml").write_text("beta")
+        from lib.kroki_autosave import restore
+        rows = restore.list_autosaves(project="Kroki-Plugin")
+        some_hash = rows[0]["hash"][:6]
+        row = restore.select_version(
+            project="Kroki-Plugin", basename="foo",
+            spec=some_hash,
+        )
+        assert row["hash"].startswith(some_hash)
+
+    def test_select_by_hash_prefix_ambiguous_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        # Two files with the SAME content → identical hash
+        (proj / "foo.20260421T120000Z.puml").write_text("alpha")
+        (proj / "foo.20260421T130000Z.puml").write_text("alpha")
+        from lib.kroki_autosave import restore
+        rows = restore.list_autosaves(project="Kroki-Plugin")
+        shared_hash = rows[0]["hash"][:6]
+        with pytest.raises(ValueError, match="ambiguous"):
+            restore.select_version(
+                project="Kroki-Plugin", basename="foo",
+                spec=shared_hash,
+            )
