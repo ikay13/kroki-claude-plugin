@@ -20,7 +20,7 @@ OUTPUT_DIR=$(mktemp -d /tmp/kroki-smoke-XXXXXX)
 INT_DIR=""
 ED_SCRATCH=""
 shopt -s nullglob
-cleanup_smoke() { [[ -n "$OUTPUT_DIR" ]] && rm -rf "$OUTPUT_DIR"; [[ -n "$INT_DIR" ]] && rm -rf "$INT_DIR"; [[ -n "$ED_SCRATCH" ]] && rm -rf "$ED_SCRATCH"; }
+cleanup_smoke() { [[ -n "$OUTPUT_DIR" ]] && rm -rf "$OUTPUT_DIR"; [[ -n "$INT_DIR" ]] && rm -rf "$INT_DIR"; [[ -n "$ED_SCRATCH" ]] && rm -rf "$ED_SCRATCH"; return 0; }
 trap cleanup_smoke EXIT INT TERM
 
 FULL_MODE=false
