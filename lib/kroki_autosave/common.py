@@ -196,12 +196,29 @@ def discover_projects(vault_path: Path) -> Tuple[List[str], List[Path]]:
     return sorted(projects_set), watch_dirs
 
 
+def _rotate_log_if_large(path: Path, max_lines: int = 500) -> None:
+    """Rotate log to <path>.1 if it exceeds max_lines. Duplicated per §3.4."""
+    try:
+        if not path.exists():
+            return
+        with path.open() as f:
+            lines = f.readlines()
+        if len(lines) <= max_lines:
+            return
+        archive = path.with_suffix(path.suffix + ".1")
+        archive.write_text("".join(lines[:-max_lines]))
+        path.write_text("".join(lines[-max_lines:]))
+    except Exception as e:
+        logger.debug("_rotate_log_if_large: %s", e)
+
+
 def notify_and_log(title: str, body: str) -> None:
     """Fire notify-send (best-effort) and append to notifications.log."""
     # Log first — guarantees audit trail even if notify-send is unavailable
     log_path = state_dir() / "notifications.log"
     try:
         state_dir().mkdir(parents=True, exist_ok=True)
+        _rotate_log_if_large(log_path, max_lines=500)
         with log_path.open("a") as fh:
             ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
             fh.write(f"{ts} kroki-autosave {title} — {body}\n")

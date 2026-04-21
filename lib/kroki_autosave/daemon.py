@@ -202,6 +202,7 @@ def _read_editor_lock() -> Optional[Dict]:
 class StageContext:
     vault_path: Path
     project_lookup: Callable[[Path], str]
+    state: Optional["DaemonState"] = None
 
     def stage_file(self, source_path: Path) -> Optional[Path]:
         """Stage a single source file as an autosave. Returns the staged file
@@ -257,7 +258,17 @@ class StageContext:
             except Exception:
                 pass
             logger.error("stage_file: copy to %s failed: %s", target, e)
+            if self.state is not None:
+                self.state.consecutive_stage_failures += 1
+                if self.state.consecutive_stage_failures >= 10 and not self.state.degraded:
+                    self.state.degraded = True
+                    common.notify_and_log(
+                        "kroki-autosave DEGRADED",
+                        "10+ consecutive stage failures — staging paused. Check logs.",
+                    )
             return None
+        if self.state is not None:
+            self.state.consecutive_stage_failures = 0
         return target
 
 
@@ -409,10 +420,14 @@ class DivergenceCycle:
                     latest = _latest_autosave(proj_dir, basename)
                     if latest is None:
                         continue
-                    _, auto_ts, _ = common.parse_autosave_filename(latest.name)
+                    _, auto_ts, ext = common.parse_autosave_filename(latest.name)
+                    # Best-effort reconstruct a usable source path for the hint
+                    reconstructed = str(
+                        self.vault_path / project / "diagrams" / f"{basename}{ext}"
+                    )
                     out.append({
                         "project": project,
-                        "source_path": f"(missing) basename={basename}",
+                        "source_path": reconstructed,
                         "last_autosave_ts": auto_ts,
                         "last_autosave_hash": common.hash_file(latest),
                         "current_hash": None,
@@ -478,11 +493,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     projects, watch_dirs = common.discover_projects(vault_path)
     logger.info("discovered %d projects: %s", len(projects), projects)
 
-    # 4. Prepare handlers
+    # 4. Prepare handlers (state passed to StageContext after state is created below)
     stage = StageContext(
         vault_path=vault_path,
         project_lookup=lambda p: common.infer_project_from_path(p, vault_path),
     )
+    # Note: stage.state is wired in after DaemonState is constructed (step 5)
     delete_handler = DeleteHandler(
         vault_path=vault_path,
         project_lookup=lambda p: common.infer_project_from_path(p, vault_path),
@@ -504,6 +520,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         config=cfg, vault_path=vault_path, lock=lock,
         watch_dirs=watch_dirs, projects=projects,
     )
+    stage.state = state  # wire circuit-breaker state into StageContext
 
     # 6. Signal handlers
     def _on_sighup(signum, frame):
@@ -511,7 +528,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         new_projects, new_dirs = common.discover_projects(vault_path)
         state.projects = new_projects
         state.watch_dirs = new_dirs
-        # (inotify watchset will be rebuilt in next loop iteration)
+        _rebuild_watches()  # immediate re-scan; closure captures _rebuild_watches
 
     def _on_shutdown(signum, frame):
         logger.info("signal %d received — shutting down", signum)
@@ -571,6 +588,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 elif ev.mask & iflags.CLOSE_WRITE or ev.mask & iflags.MOVED_TO:
                     if common.should_skip(path):
                         continue
+                    if state.degraded:
+                        continue  # circuit breaker open — skip staging
                     debouncer.enqueue(path)
 
             # Periodic cycle tick

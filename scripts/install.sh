@@ -265,7 +265,11 @@ echo "  ~/.kroki-plugin/autosaves/ exists with mode 700"
 # Step 4f — Install systemd user service
 echo ""
 echo "[4f/5] Systemd user service..."
-if [[ -z "${SKIP_SYSTEMD:-}" ]]; then
+if $SKIP_SYSTEMD; then
+    echo "Step 4f: kroki-autosave.service (skipped — --skip-systemd)"
+elif ! command -v systemctl >/dev/null 2>&1; then
+    echo "Step 4f: kroki-autosave.service (skipped — systemctl not available)"
+else
     mkdir -p ~/.config/systemd/user
     cp "$REPO_ROOT/systemd/kroki-autosave.service" \
        ~/.config/systemd/user/kroki-autosave.service
@@ -273,9 +277,7 @@ if [[ -z "${SKIP_SYSTEMD:-}" ]]; then
        ~/.config/systemd/user/kroki-autosave-failed.service
     systemctl --user daemon-reload
     systemctl --user enable --now kroki-autosave.service
-    echo "  kroki-autosave.service enabled and started"
-else
-    echo "  SKIP_SYSTEMD set — skipping systemd integration"
+    echo "Step 4f: kroki-autosave.service enabled and started"
 fi
 
 # Step 4g — CLI symlink
