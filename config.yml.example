@@ -14,3 +14,14 @@ version_check:
 
 a11y:
   skip_all: false       # reserved per plugin design §13; not wired by Plan 5b
+
+autosave:
+  enabled: true                  # set false to disable staging entirely; daemon still runs for divergence scans
+  vault_path: ~/Documents/Obsidian Vault   # root of per-project folders; glob is <vault_path>/*/{diagrams,sessions}/
+  ttl_days: 7                    # autosaves older than this are pruned on every daemon cycle
+  debounce_seconds: 2            # coalesce rapid writes to the same file within this window
+  rescan_interval_hours: 1       # periodic re-glob for new projects + prune sweep
+  session_start_scan: true       # daemon writes divergence.json consumed by kroki-session(mode=start)
+  divergence_stale_threshold_seconds: 60  # source-changed-but-no-autosave-in-Ns → flagged as diverged
+  divergence_freshness_window_seconds: 600 # session-start suppresses divergence.json entries older than this
+  notify_on_delete: true         # fire notify-send on inotify DELETE events

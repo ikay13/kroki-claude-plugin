@@ -26,7 +26,9 @@ Lock released.
 If you edited in Niolesk, click Download and place the file at:
     $SRC
 
-Automated save-back is deferred to a future plan.
+Automated Niolesk save-back is deferred — see
+specs/2026-04-21-plan-5d-autosave-daemon-design.md §11 (Deferred / Future Work).
+Plan 5d ships autosave for filesystem source edits; Niolesk bridge is separately deferred.
 EOF
 else
     echo "Lock released (blank session)."
