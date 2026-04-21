@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -469,3 +470,150 @@ class TestDigestHelpers:
         current = {"a": "sha256:1", "b": "sha256:X"}
         changed = version_check.compute_changed_images(baseline, current)
         assert changed == {"b": ("sha256:2", "sha256:X")}
+
+
+class TestVersionCheckCycle:
+    def _setup(self, tmp_path, monkeypatch, pod_images=None, local_digests=None):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        pod_images = pod_images or ["docker.io/yuzutech/kroki:latest"]
+        local_digests = local_digests or {"docker.io/yuzutech/kroki:latest": "sha256:new"}
+        self.pod_images = pod_images
+        self.local_digests = local_digests
+
+    def test_disabled_is_noop(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / "config.yml").write_text("version_check:\n  enabled: false\n")
+        from lib.kroki_container import version_check
+        assert version_check.cycle() == 0
+
+    def test_offline_defers_cleanly(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import version_check
+        with patch.object(version_check.common, "network_available", return_value=False):
+            assert version_check.cycle() == 0
+
+    def test_upgrade_in_progress_defers(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".upgrade-in-progress").write_text(f"{os.getpid()} {int(time.time())}")
+        from lib.kroki_container import version_check
+        with patch.object(version_check.common, "network_available", return_value=True):
+            assert version_check.cycle() == 0
+
+    def test_editor_lock_defers(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import version_check
+        with patch.object(version_check.common, "network_available", return_value=True), \
+             patch.object(version_check, "read_lock", return_value={"source_path": "x", "started_at": int(time.time())}), \
+             patch.object(version_check, "is_stale", return_value=False):
+            assert version_check.cycle() == 0
+
+    def test_first_run_pulls_and_writes_baseline_no_notify_if_deferred(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import version_check
+        with patch.object(version_check.common, "network_available", return_value=True), \
+             patch.object(version_check, "read_lock", return_value=None), \
+             patch.object(version_check, "discover_pod_images",
+                          return_value=["docker.io/yuzutech/kroki:latest"]), \
+             patch.object(version_check, "is_upstream", return_value=True), \
+             patch.object(version_check, "pull_image", return_value=True), \
+             patch.object(version_check, "inspect_local_digest",
+                          return_value="sha256:newcode"), \
+             patch.object(version_check.common, "notify_and_log") as mock_notify:
+            assert version_check.cycle() == 0
+        # baseline written
+        baseline = json.loads((tmp_path / ".version-baseline.json").read_text())
+        assert baseline == {"docker.io/yuzutech/kroki:latest": "sha256:newcode"}
+        # first-run IS a change (baseline was empty) — notify fires
+        assert mock_notify.called
+
+    def test_auto_defer_written_after_notify(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import version_check
+        with patch.object(version_check.common, "network_available", return_value=True), \
+             patch.object(version_check, "read_lock", return_value=None), \
+             patch.object(version_check, "discover_pod_images",
+                          return_value=["docker.io/yuzutech/kroki:latest"]), \
+             patch.object(version_check, "is_upstream", return_value=True), \
+             patch.object(version_check, "pull_image", return_value=True), \
+             patch.object(version_check, "inspect_local_digest",
+                          return_value="sha256:newcode"), \
+             patch.object(version_check.common, "notify_and_log"):
+            version_check.cycle()
+        deferred = json.loads((tmp_path / ".upgrade-deferred.json").read_text())
+        now = int(time.time())
+        assert deferred["deferred_until"] >= now + 86000
+        assert "digest_set_hash" in deferred
+
+    def test_valid_defer_suppresses_notify(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        # Precompute digest_set_hash for the current state
+        digest_map = {"docker.io/yuzutech/kroki:latest": "sha256:newcode"}
+        from lib.kroki_container import version_check
+        dsh = version_check.compute_digest_set_hash(digest_map)
+        (tmp_path / ".upgrade-deferred.json").write_text(
+            json.dumps({"digest_set_hash": dsh, "deferred_until": int(time.time()) + 3600})
+        )
+        (tmp_path / ".version-baseline.json").write_text(
+            json.dumps({"docker.io/yuzutech/kroki:latest": "sha256:old"})
+        )
+        with patch.object(version_check.common, "network_available", return_value=True), \
+             patch.object(version_check, "read_lock", return_value=None), \
+             patch.object(version_check, "discover_pod_images",
+                          return_value=["docker.io/yuzutech/kroki:latest"]), \
+             patch.object(version_check, "is_upstream", return_value=True), \
+             patch.object(version_check, "pull_image", return_value=True), \
+             patch.object(version_check, "inspect_local_digest",
+                          return_value="sha256:newcode"), \
+             patch.object(version_check.common, "notify_and_log") as mock_notify:
+            version_check.cycle()
+        assert not mock_notify.called
+
+    def test_no_change_is_silent(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".version-baseline.json").write_text(
+            json.dumps({"docker.io/yuzutech/kroki:latest": "sha256:same"})
+        )
+        from lib.kroki_container import version_check
+        with patch.object(version_check.common, "network_available", return_value=True), \
+             patch.object(version_check, "read_lock", return_value=None), \
+             patch.object(version_check, "discover_pod_images",
+                          return_value=["docker.io/yuzutech/kroki:latest"]), \
+             patch.object(version_check, "is_upstream", return_value=True), \
+             patch.object(version_check, "pull_image", return_value=True), \
+             patch.object(version_check, "inspect_local_digest",
+                          return_value="sha256:same"), \
+             patch.object(version_check.common, "notify_and_log") as mock_notify:
+            version_check.cycle()
+        assert not mock_notify.called
+
+
+class TestVersionCheckSubcommands:
+    def test_defer_writes_state(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".version-baseline.json").write_text(
+            json.dumps({"a:tag": "sha256:x"})
+        )
+        from lib.kroki_container import version_check
+        assert version_check.cmd_defer("7d") == 0
+        d = json.loads((tmp_path / ".upgrade-deferred.json").read_text())
+        assert d["deferred_until"] - int(time.time()) >= 7 * 86400 - 100
+
+    def test_skip_writes_far_future_defer(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".version-baseline.json").write_text(
+            json.dumps({"a:tag": "sha256:x"})
+        )
+        from lib.kroki_container import version_check
+        assert version_check.cmd_skip() == 0
+        d = json.loads((tmp_path / ".upgrade-deferred.json").read_text())
+        assert d["deferred_until"] >= 4_102_444_800
+
+    def test_status_prints_readable(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import version_check
+        version_check.cmd_status()
+        out = capsys.readouterr().out
+        assert "baseline" in out.lower() or "deferred" in out.lower()
