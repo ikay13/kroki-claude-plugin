@@ -5,9 +5,73 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict, List
 
 from lib.kroki_session import common
+
+
+def _state_dir_for_autosaves() -> Path:
+    """Resolve ~/.kroki-plugin honoring KROKI_STATE_DIR for tests."""
+    return Path(os.environ.get("KROKI_STATE_DIR",
+                               os.path.expanduser("~/.kroki-plugin")))
+
+
+def _parse_iso(s: str):
+    """Tolerant ISO-8601 parser (handles 'Z' suffix)."""
+    try:
+        if s.endswith("Z"):
+            return datetime.fromisoformat(s[:-1]).replace(tzinfo=timezone.utc)
+        return datetime.fromisoformat(s)
+    except (ValueError, AttributeError):
+        return None
+
+
+def scan_divergence(project: str,
+                    freshness_window_seconds: int = 600) -> List[Dict]:
+    """Read ~/.kroki-plugin/autosaves/divergence.json; filter rows for this
+    project. Returns [] if file absent, bad, or the daemon's last cycle
+    checked_at is older than freshness_window_seconds."""
+    path = _state_dir_for_autosaves() / "autosaves" / "divergence.json"
+    if not path.exists():
+        return []
+    try:
+        rows = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(rows, list):
+        return []
+
+    # Freshness gate
+    now = datetime.now(timezone.utc)
+    parsed_timestamps = [
+        _parse_iso(r.get("checked_at")) for r in rows
+        if isinstance(r, dict) and r.get("checked_at")
+    ]
+    parsed_timestamps = [t for t in parsed_timestamps if t is not None]
+    if not parsed_timestamps:
+        return []
+    newest = max(parsed_timestamps)
+    if (now - newest).total_seconds() > freshness_window_seconds:
+        return []
+
+    out: List[Dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if r.get("project") != project:
+            continue
+        sp = r.get("source_path")
+        if not sp:
+            continue
+        out.append({
+            "source_path": sp,
+            "last_autosave_ts": r.get("last_autosave_ts", ""),
+            "status": r.get("status", "unknown"),
+            "hint": f"kroki-autosave list {sp}",
+        })
+    return out
 
 
 def main(project: str, auto: bool = False, vault_path_override: Path | None = None) -> int:
@@ -67,6 +131,8 @@ def main(project: str, auto: bool = False, vault_path_override: Path | None = No
         "reference_summary": reference_summary,
         "last_next_steps": memory.get("next_steps", []),
     }
+    # Plan 5d: surface autosave divergence in start-mode payload
+    payload["autosave_divergence"] = scan_divergence(project)
 
     print(json.dumps(payload, indent=2))
     print(
