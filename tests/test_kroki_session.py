@@ -1016,3 +1016,21 @@ class TestSnapshot:
                       vault_path_override=pr)
         idx = (pr / "diagrams" / "milestones" / "INDEX.md").read_text()
         assert "v0.1.0" in idx
+
+
+class TestLock:
+    """Tests for lib.kroki_session.lock — editor lock lifecycle."""
+
+    def test_module_importable_and_exports_api(self):
+        from lib.kroki_session import lock
+        # Core constants
+        assert hasattr(lock, "LOCK_PATH")
+        assert hasattr(lock, "STALE_THRESHOLD_SECONDS")
+        assert lock.STALE_THRESHOLD_SECONDS == 2 * 60 * 60
+        # Public functions (stubs OK for now)
+        for name in ("write_lock", "read_lock", "clear_lock", "is_stale", "check_editor_lock"):
+            assert callable(getattr(lock, name)), f"missing: {name}"
+        # Dataclass + exception
+        assert hasattr(lock, "LockCheckResult")
+        assert hasattr(lock, "LockHeldError")
+        assert issubclass(lock.LockHeldError, Exception)
