@@ -663,3 +663,127 @@ class TestDebounce:
         deb.flush()
         deb.stop()
         assert fired == [str(tmp_path / "a.puml")]
+
+
+class TestStageOperation:
+    def test_stage_creates_autosave_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("CONTENT")
+        from lib.kroki_autosave import daemon, common
+        stage = daemon.StageContext(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        stage.stage_file(src)
+        autosaves = list((tmp_path / "autosaves" / "Kroki-Plugin").iterdir())
+        assert len(autosaves) == 1
+        assert autosaves[0].read_text() == "CONTENT"
+
+    def test_stage_atomic_via_rename(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("CONTENT")
+        from lib.kroki_autosave import daemon, common
+        stage = daemon.StageContext(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        stage.stage_file(src)
+        # No .tmp file should remain
+        assert not any(
+            str(p).endswith(".tmp")
+            for p in (tmp_path / "autosaves" / "Kroki-Plugin").iterdir()
+        )
+
+
+class TestLockSuppression:
+    def test_stage_skipped_when_lock_matches_source(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("CONTENT")
+        # Mock read_lock to return a lock matching source
+        from lib.kroki_autosave import daemon, common
+        fake_lock = {"source_path": str(src.resolve()),
+                     "started_at": "2026-04-21T13:00:00Z"}
+        monkeypatch.setattr(daemon, "_read_editor_lock", lambda: fake_lock)
+
+        stage = daemon.StageContext(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        stage.stage_file(src)
+        autosaves = list((tmp_path / "autosaves" / "Kroki-Plugin").glob("*")) \
+            if (tmp_path / "autosaves" / "Kroki-Plugin").exists() else []
+        assert autosaves == []
+
+    def test_stage_proceeds_when_lock_other_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("CONTENT")
+        from lib.kroki_autosave import daemon, common
+        # Lock held for a DIFFERENT file
+        fake_lock = {"source_path": "/some/other/file.puml",
+                     "started_at": "2026-04-21T13:00:00Z"}
+        monkeypatch.setattr(daemon, "_read_editor_lock", lambda: fake_lock)
+
+        stage = daemon.StageContext(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        stage.stage_file(src)
+        autosaves = list((tmp_path / "autosaves" / "Kroki-Plugin").iterdir())
+        assert len(autosaves) == 1
+
+    def test_stage_proceeds_when_lock_import_fails(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("CONTENT")
+        from lib.kroki_autosave import daemon, common
+
+        def raise_import():
+            raise ImportError("lock module broken")
+        monkeypatch.setattr(daemon, "_read_editor_lock", raise_import)
+
+        stage = daemon.StageContext(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        stage.stage_file(src)  # fail-open per §8 + §10.12
+        autosaves = list((tmp_path / "autosaves" / "Kroki-Plugin").iterdir())
+        assert len(autosaves) == 1
+
+
+class TestLastUseIsolation:
+    def test_stage_does_not_touch_last_use(self, tmp_path, monkeypatch):
+        """Regression guard for design §7.5."""
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        # Create a .last-use file with a known mtime
+        last_use = tmp_path / ".last-use"
+        last_use.write_text("old")
+        known_ts = 1000000000  # 2001
+        os.utime(last_use, (known_ts, known_ts))
+
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        src.write_text("CONTENT")
+
+        from lib.kroki_autosave import daemon, common
+        stage = daemon.StageContext(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+        )
+        stage.stage_file(src)
+
+        assert last_use.stat().st_mtime == known_ts

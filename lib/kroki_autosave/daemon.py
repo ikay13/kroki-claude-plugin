@@ -177,3 +177,85 @@ class Debouncer:
             for entry in self._entries.values():
                 entry.timer.cancel()
             self._entries.clear()
+
+
+# ============================================================================
+# Editor lock (cross-package import, fail-open per §8/§10.12)
+# ============================================================================
+
+def _read_editor_lock() -> Optional[Dict]:
+    """Call lib.kroki_session.lock.read_lock(). Fail-open on any import/call
+    failure per design spec §8 + known-limitation §10.12."""
+    try:
+        from lib.kroki_session.lock import read_lock
+        return read_lock()
+    except Exception as e:
+        logger.warning("_read_editor_lock: %s — fail-open (no suppression)", e)
+        return None
+
+
+# ============================================================================
+# Stage operation
+# ============================================================================
+
+@dataclass
+class StageContext:
+    vault_path: Path
+    project_lookup: Callable[[Path], str]
+
+    def stage_file(self, source_path: Path) -> Optional[Path]:
+        """Stage a single source file as an autosave. Returns the staged file
+        path, or None if skipped (filtered / lock-suppressed / error)."""
+        source_path = Path(source_path).resolve()
+
+        # 1. File filter
+        if common.should_skip(source_path):
+            return None
+
+        # 2. Editor lock suppression (fail-open)
+        try:
+            lock = _read_editor_lock()
+            if lock and lock.get("source_path"):
+                try:
+                    locked = Path(lock["source_path"]).resolve()
+                    if locked == source_path:
+                        logger.debug("stage_file: suppressed (editor lock on %s)",
+                                     source_path)
+                        return None
+                except (OSError, ValueError):
+                    pass
+        except Exception:
+            # Already caught and logged inside _read_editor_lock; proceed
+            pass
+
+        # 3. Determine project
+        try:
+            project = self.project_lookup(source_path)
+        except ValueError as e:
+            logger.warning("stage_file: %s — skipping", e)
+            return None
+
+        # 4. Build target path
+        basename = source_path.stem
+        ext = source_path.suffix
+        ts = common.now_utc_iso_compact()
+        target_name = common.build_autosave_filename(basename, ts, ext)
+        project_dir = common.project_autosaves_dir(project)
+        target = project_dir / target_name
+        tmp = target.with_suffix(target.suffix + ".tmp")
+
+        # 5. Atomic copy: copy to .tmp, then rename (explicitly DO NOT touch
+        #    ~/.kroki-plugin/.last-use — see §7.5 isolation rule)
+        try:
+            import shutil
+            project_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, tmp)
+            tmp.replace(target)
+        except Exception as e:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            logger.error("stage_file: copy to %s failed: %s", target, e)
+            return None
+        return target
