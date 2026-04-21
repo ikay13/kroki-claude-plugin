@@ -13,3 +13,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Worktrees for feature branches
+.worktrees/
