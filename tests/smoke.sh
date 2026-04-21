@@ -113,6 +113,21 @@ run_fixture() {
     ((++pass))
 }
 
+run_test() {
+    local name="$1"
+    local test_code="$2"
+
+    ((++total))
+
+    if eval "$test_code"; then
+        echo "  PASS  $name"
+        ((++pass))
+    else
+        echo "  FAIL  $name"
+        ((++fail))
+    fi
+}
+
 echo "Kroki Smoke Test"
 echo "================"
 echo ""
@@ -573,6 +588,108 @@ STUB
     # Restore HOME.
     if [[ "$RG_SAVED_HOME" != "" ]]; then export HOME="$RG_SAVED_HOME"; else unset HOME; fi
 fi
+
+# --- W-block: watchdog scenarios (Plan 5b) ----------------------------------
+
+ED_SCRATCH_W="$(mktemp -d)"
+export KROKI_STATE_DIR="$ED_SCRATCH_W"
+
+cleanup_w_block() {
+    [[ -d "$ED_SCRATCH_W" ]] && rm -rf "$ED_SCRATCH_W"
+    unset KROKI_STATE_DIR
+    return 0
+}
+trap cleanup_w_block EXIT
+
+# Mock kroki.sh down to a no-op for these tests
+MOCK_BIN="$ED_SCRATCH_W/mock-bin"
+mkdir -p "$MOCK_BIN"
+cat > "$MOCK_BIN/kroki.sh" <<'MOCK'
+#!/bin/sh
+echo "[MOCK] kroki.sh $*"
+exit 0
+MOCK
+chmod +x "$MOCK_BIN/kroki.sh"
+export KROKI_SH="$MOCK_BIN/kroki.sh"
+
+run_test "W1: recent .last-use → cycle noop" '
+    echo $(date +%s) > $ED_SCRATCH_W/.last-use
+    ./scripts/container-watchdog.sh >/dev/null
+    [[ ! -f $ED_SCRATCH_W/.watchdog-tier-fired.json ]] || { echo "unexpected tier fire"; exit 1; }
+'
+
+run_test "W2: simulate 2h+ idle → tier-1 fires" '
+    echo $(( $(date +%s) - 7260 )) > $ED_SCRATCH_W/.last-use
+    rm -f $ED_SCRATCH_W/.watchdog-tier-fired.json
+    ./scripts/container-watchdog.sh >/dev/null
+    [[ -f $ED_SCRATCH_W/.watchdog-tier-fired.json ]] || { echo "no tier state"; exit 1; }
+    grep -q tier1_fired_at $ED_SCRATCH_W/.watchdog-tier-fired.json
+    grep -q notifications.log <(ls $ED_SCRATCH_W)
+'
+
+run_test "W3: second cycle after tier-1 does not re-fire" '
+    NOTIF_BEFORE=$(wc -l < $ED_SCRATCH_W/notifications.log)
+    ./scripts/container-watchdog.sh >/dev/null
+    NOTIF_AFTER=$(wc -l < $ED_SCRATCH_W/notifications.log)
+    [[ $NOTIF_BEFORE -eq $NOTIF_AFTER ]] || { echo "spurious re-fire"; exit 1; }
+'
+
+run_test "W4: simulate 6h+ idle → tier-2 fires + auto-stop" '
+    echo $(( $(date +%s) - 22000 )) > $ED_SCRATCH_W/.last-use
+    rm -f $ED_SCRATCH_W/.watchdog-tier-fired.json
+    ./scripts/container-watchdog.sh > $ED_SCRATCH_W/w4.out
+    grep -q "\[MOCK\] kroki.sh down" $ED_SCRATCH_W/w4.out
+    python3 -c "
+import json, sys
+d = json.load(open(\"$ED_SCRATCH_W/.watchdog-tier-fired.json\"))
+sys.exit(0 if d.get(\"tier2_fired_at\") else 1)
+"
+'
+
+run_test "W5: editor lock held → cycle skips" '
+    echo $(( $(date +%s) - 22000 )) > $ED_SCRATCH_W/.last-use
+    rm -f $ED_SCRATCH_W/.watchdog-tier-fired.json
+    python3 -c "
+import json, os, time
+p = os.path.join(os.environ[\"KROKI_STATE_DIR\"], \".active-editor.lock\")
+json.dump({\"source_path\":\"/x.puml\",\"started_at\":int(time.time()),\"pid\":9999,\"share_url\":\"http://\"}, open(p,\"w\"))
+"
+    ./scripts/container-watchdog.sh > $ED_SCRATCH_W/w5.out
+    ! grep -q "kroki.sh down" $ED_SCRATCH_W/w5.out
+    [[ ! -f $ED_SCRATCH_W/.watchdog-tier-fired.json ]] || python3 -c "
+import json, sys
+d = json.load(open(\"$ED_SCRATCH_W/.watchdog-tier-fired.json\"))
+sys.exit(1 if d.get(\"tier2_fired_at\") else 0)
+"
+    rm -f $ED_SCRATCH_W/.active-editor.lock
+'
+
+run_test "W6: snooze set → cycle skips" '
+    echo $(( $(date +%s) - 7300 )) > $ED_SCRATCH_W/.last-use
+    rm -f $ED_SCRATCH_W/.watchdog-tier-fired.json
+    echo $(( $(date +%s) + 3600 )) > $ED_SCRATCH_W/.watchdog-snooze-until
+    ./scripts/container-watchdog.sh > $ED_SCRATCH_W/w6.out
+    [[ ! -f $ED_SCRATCH_W/.watchdog-tier-fired.json ]]
+    rm -f $ED_SCRATCH_W/.watchdog-snooze-until
+'
+
+run_test "W7: .upgrade-in-progress flag → cycle skips" '
+    echo $(( $(date +%s) - 22000 )) > $ED_SCRATCH_W/.last-use
+    rm -f $ED_SCRATCH_W/.watchdog-tier-fired.json
+    echo "$$ $(date +%s)" > $ED_SCRATCH_W/.upgrade-in-progress
+    ./scripts/container-watchdog.sh > $ED_SCRATCH_W/w7.out
+    ! grep -q "kroki.sh down" $ED_SCRATCH_W/w7.out
+    [[ ! -f $ED_SCRATCH_W/.watchdog-tier-fired.json ]] || python3 -c "
+import json, sys
+d = json.load(open(\"$ED_SCRATCH_W/.watchdog-tier-fired.json\"))
+sys.exit(1 if d.get(\"tier2_fired_at\") else 0)
+"
+    rm -f $ED_SCRATCH_W/.upgrade-in-progress
+'
+
+unset KROKI_STATE_DIR KROKI_SH
+cleanup_w_block
+trap - EXIT
 
 # Python unit tests (Plan 2)
 if command -v python3 >/dev/null 2>&1; then
