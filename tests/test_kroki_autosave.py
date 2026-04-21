@@ -2,6 +2,8 @@
 
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -447,3 +449,56 @@ class TestRestoreSelection:
                 project="Kroki-Plugin", basename="foo",
                 spec=shared_hash,
             )
+
+
+class TestRestoreCLI:
+    def test_list_subcommand_no_args(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("PYTHONPATH", str(Path.cwd()))
+        proj = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj.mkdir(parents=True)
+        (proj / "arch.20260421T120000Z.puml").write_text("alpha")
+        result = subprocess.run(
+            [sys.executable, "-m", "lib.kroki_autosave.restore", "list"],
+            capture_output=True, text=True,
+            env={**os.environ, "KROKI_STATE_DIR": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert "Kroki-Plugin" in result.stdout
+        assert "arch" in result.stdout
+        assert "20260421T120000Z" in result.stdout
+
+    def test_restore_subcommand_atomic_replace(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        proj_src = vault / "Kroki-Plugin" / "diagrams"
+        proj_src.mkdir(parents=True)
+        source = proj_src / "arch.puml"
+        source.write_text("CURRENT")
+        # Stage an "older" version to recover
+        proj_stage = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj_stage.mkdir(parents=True)
+        stage_file = proj_stage / "arch.20260421T120000Z.puml"
+        stage_file.write_text("ORIGINAL")
+        # Restore with --yes (non-interactive)
+        result = subprocess.run(
+            [sys.executable, "-m", "lib.kroki_autosave.restore",
+             "restore", str(source), "--yes"],
+            capture_output=True, text=True,
+            env={**os.environ, "KROKI_STATE_DIR": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert source.read_text() == "ORIGINAL"
+        # Pre-restore content should have been staged as an autosave
+        staged = list(proj_stage.glob("arch.*.puml"))
+        assert len(staged) >= 2  # original + pre-restore
+
+    def test_restore_subcommand_missing_source(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        result = subprocess.run(
+            [sys.executable, "-m", "lib.kroki_autosave.restore",
+             "restore", "/nonexistent/foo.puml", "--yes"],
+            capture_output=True, text=True,
+            env={**os.environ, "KROKI_STATE_DIR": str(tmp_path)},
+        )
+        assert result.returncode != 0  # error exit
