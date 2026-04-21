@@ -443,3 +443,183 @@ def write_divergence_json(entries: List[Dict]) -> None:
     """Atomically write divergence.json at ~/.kroki-plugin/autosaves/."""
     path = common.autosaves_root() / "divergence.json"
     common.atomic_write(path, json.dumps(entries, indent=2))
+
+
+# ============================================================================
+# Main event loop + signal handlers
+# ============================================================================
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Daemon entry point — called by scripts/autosave-daemon.sh."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    # 1. Ensure staging dir + chmod 700
+    root = common.autosaves_root()  # creates + chmods
+    logger.info("autosaves root: %s", root)
+
+    # 2. Acquire pidfile
+    pidfile = root / ".autosave-daemon.pid"
+    lock = PidFileLock(pidfile)
+    try:
+        lock.acquire()
+    except DaemonAlreadyRunningError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    # 3. Load config
+    cfg = common.load_config()
+    if not cfg["autosave"]["enabled"]:
+        logger.info("autosave.enabled=false — daemon will idle")
+
+    vault_path = Path(cfg["autosave"]["vault_path"])
+    projects, watch_dirs = common.discover_projects(vault_path)
+    logger.info("discovered %d projects: %s", len(projects), projects)
+
+    # 4. Prepare handlers
+    stage = StageContext(
+        vault_path=vault_path,
+        project_lookup=lambda p: common.infer_project_from_path(p, vault_path),
+    )
+    delete_handler = DeleteHandler(
+        vault_path=vault_path,
+        project_lookup=lambda p: common.infer_project_from_path(p, vault_path),
+        notify_on_delete=cfg["autosave"]["notify_on_delete"],
+    )
+    div_cycle = DivergenceCycle(
+        vault_path=vault_path,
+        stale_threshold_seconds=cfg["autosave"]["divergence_stale_threshold_seconds"],
+        project_lookup=lambda p: common.infer_project_from_path(p, vault_path),
+    )
+
+    debouncer = Debouncer(
+        delay_seconds=cfg["autosave"]["debounce_seconds"],
+        on_fire=stage.stage_file,
+    )
+
+    # 5. Shared daemon state
+    state = DaemonState(
+        config=cfg, vault_path=vault_path, lock=lock,
+        watch_dirs=watch_dirs, projects=projects,
+    )
+
+    # 6. Signal handlers
+    def _on_sighup(signum, frame):
+        logger.info("SIGHUP received — rescanning vault")
+        new_projects, new_dirs = common.discover_projects(vault_path)
+        state.projects = new_projects
+        state.watch_dirs = new_dirs
+        # (inotify watchset will be rebuilt in next loop iteration)
+
+    def _on_shutdown(signum, frame):
+        logger.info("signal %d received — shutting down", signum)
+        state.shutdown_requested = True
+
+    signal.signal(signal.SIGHUP, _on_sighup)
+    signal.signal(signal.SIGTERM, _on_shutdown)
+    signal.signal(signal.SIGINT, _on_shutdown)
+
+    # 7. Set up inotify
+    try:
+        from inotify_simple import INotify, flags as iflags
+    except ImportError:
+        logger.error("inotify_simple not installed; cannot run. "
+                     "pip install --user inotify_simple")
+        return 2
+
+    inot = INotify()
+    watch_descriptors: Dict[int, Path] = {}
+
+    def _rebuild_watches():
+        for wd, _ in list(watch_descriptors.items()):
+            try:
+                inot.rm_watch(wd)
+            except Exception:
+                pass
+        watch_descriptors.clear()
+        mask = (iflags.CLOSE_WRITE | iflags.DELETE
+                | iflags.MOVED_FROM | iflags.MOVED_TO)
+        for d in state.watch_dirs:
+            try:
+                wd = inot.add_watch(str(d), mask)
+                watch_descriptors[wd] = d
+            except Exception as e:
+                logger.warning("add_watch(%s) failed: %s", d, e)
+
+    _rebuild_watches()
+
+    # 8. Main loop
+    last_cycle_ts = 0.0
+    last_rescan_ts = time.time()
+    rescan_interval = cfg["autosave"]["rescan_interval_hours"] * 3600
+    cycle_interval = 60  # seconds
+
+    logger.info("daemon started; entering event loop")
+    try:
+        while not state.shutdown_requested:
+            # Check for inotify events (1s timeout for signal responsiveness)
+            events = inot.read(timeout=1000)
+            for ev in events:
+                dir_path = watch_descriptors.get(ev.wd)
+                if dir_path is None:
+                    continue
+                path = dir_path / ev.name
+                if ev.mask & iflags.DELETE or ev.mask & iflags.MOVED_FROM:
+                    delete_handler.handle_delete(path)
+                elif ev.mask & iflags.CLOSE_WRITE or ev.mask & iflags.MOVED_TO:
+                    if common.should_skip(path):
+                        continue
+                    debouncer.enqueue(path)
+
+            # Periodic cycle tick
+            now_ts = time.time()
+            if now_ts - last_cycle_ts >= cycle_interval:
+                last_cycle_ts = now_ts
+                if cfg["autosave"]["session_start_scan"]:
+                    try:
+                        entries = div_cycle.compute_all(
+                            projects=state.projects,
+                            watch_dirs=state.watch_dirs,
+                        )
+                        write_divergence_json(entries)
+                    except Exception as e:
+                        logger.exception("divergence cycle failed: %s", e)
+                # Prune sweep across all projects
+                _prune_sweep(state.projects,
+                             cfg["autosave"]["ttl_days"], now_ts)
+
+            # Periodic rescan
+            if now_ts - last_rescan_ts >= rescan_interval:
+                last_rescan_ts = now_ts
+                _on_sighup(None, None)  # trigger rescan (reuses handler)
+                _rebuild_watches()
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        logger.info("shutdown: flushing debouncer + releasing lock")
+        debouncer.flush()
+        debouncer.stop()
+        try:
+            inot.close()
+        except Exception:
+            pass
+        lock.release()
+
+    return 0
+
+
+def _prune_sweep(projects: List[str], ttl_days: int, now_ts: float) -> None:
+    root = common.autosaves_root()
+    for project in projects:
+        proj_dir = root / project
+        for path in common.find_prunable(proj_dir, ttl_days=ttl_days, now_ts=now_ts):
+            dest = common.move_to_trash(path)
+            if dest:
+                logger.info("prune: %s -> %s", path, dest)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
