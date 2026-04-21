@@ -327,6 +327,62 @@ unlocked once Plan 5 ships.
 
 **Pass criteria:** `notifications.log` gains a new "upgrade available" entry in step 4.
 
+## Scenario 21 — Autosave full cycle (Plan 5d)
+
+**Goal:** Manually walk through edit → stage → divergence → restore.
+
+**Pre-requisites:** v1.3.0 installed; `kroki-autosave.service` active
+(`systemctl --user is-active kroki-autosave.service`).
+
+**Steps:**
+
+1. Pick a non-critical test file, e.g.,
+   `~/Documents/Obsidian Vault/Kroki-Plugin/diagrams/test-integration.puml`.
+   Write initial content (`@startuml\nclass A\n@enduml`) and save.
+
+2. After ~3s, verify the autosave has been staged:
+   ```
+   kroki-autosave list test-integration.puml
+   ```
+   Expected: one entry with today's timestamp.
+
+3. Make edits over 30s (3 saves with ~10s between them):
+   ```
+   echo "class B" >> test-integration.puml  # wait 10s
+   echo "class C" >> test-integration.puml  # wait 10s
+   echo "class D" >> test-integration.puml
+   ```
+   Verify `kroki-autosave list` shows 3+ entries (first one + any restage events).
+
+4. Discard recent edits via git:
+   ```
+   cd ~/Documents/Obsidian\ Vault/Kroki-Plugin
+   git checkout -- diagrams/test-integration.puml
+   ```
+   This fires a fresh close_write; daemon stages the post-checkout content.
+
+5. Wait ~70s. Check divergence.json:
+   ```
+   cat ~/.kroki-plugin/autosaves/divergence.json
+   ```
+   (May or may not show an entry depending on whether the reverted content
+   matches a prior autosave hash — acceptable either way.)
+
+6. Restore the earliest autosave (recovers pre-git-checkout edits):
+   ```
+   EARLIEST=$(kroki-autosave list test-integration.puml | awk '{print $1}' | tail -1)
+   kroki-autosave restore test-integration.puml "$EARLIEST"
+   ```
+   Confirm at prompt; verify content matches the pre-checkout state.
+
+7. Clean up:
+   ```
+   git restore diagrams/test-integration.puml  # if file was modified
+   rm diagrams/test-integration.puml           # or delete if never committed
+   ```
+
+**Pass criteria:** autosave list shows entries; restage observes edits; divergence.json may or may not be populated (acceptable); restore recovers earlier version.
+
 ## Pass criteria
 
 All scenarios except #3, #16, and #17 must PASS before tagging a release.
