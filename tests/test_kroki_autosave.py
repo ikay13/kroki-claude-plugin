@@ -787,3 +787,74 @@ class TestLastUseIsolation:
         stage.stage_file(src)
 
         assert last_use.stat().st_mtime == known_ts
+
+
+class TestDeleteHandler:
+    def test_delete_logs_notification(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+        # Pretend we had an earlier autosave
+        proj_stage = tmp_path / "autosaves" / "Kroki-Plugin"
+        proj_stage.mkdir(parents=True)
+        (proj_stage / "arch.20260421T100000Z.puml").write_text("earlier")
+
+        monkeypatch.setattr("subprocess.run",
+                            lambda *a, **k: MagicMock(returncode=0))
+
+        from lib.kroki_autosave import daemon, common
+        handler = daemon.DeleteHandler(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+            notify_on_delete=True,
+        )
+        handler.handle_delete(src)
+
+        log = (tmp_path / "notifications.log").read_text()
+        assert "DELETE" in log or "deleted" in log
+        # Prior autosave NOT removed
+        assert (proj_stage / "arch.20260421T100000Z.puml").exists()
+
+    def test_delete_skips_filtered_files(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        # Create filter-hit path (dotfile)
+        src = vault / "Kroki-Plugin" / "diagrams" / ".hidden.swp"
+        src.parent.mkdir(parents=True)
+
+        calls = []
+        monkeypatch.setattr("subprocess.run",
+                            lambda *a, **k: calls.append(a) or MagicMock(returncode=0))
+
+        from lib.kroki_autosave import daemon, common
+        handler = daemon.DeleteHandler(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+            notify_on_delete=True,
+        )
+        handler.handle_delete(src)
+
+        # No notify, no log for filtered paths
+        log_path = tmp_path / "notifications.log"
+        assert not log_path.exists() or "DELETE" not in log_path.read_text()
+
+    def test_delete_disabled_by_config(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        vault = tmp_path / "Vault"
+        src = vault / "Kroki-Plugin" / "diagrams" / "arch.puml"
+        src.parent.mkdir(parents=True)
+
+        calls = []
+        monkeypatch.setattr("subprocess.run",
+                            lambda *a, **k: calls.append(a) or MagicMock(returncode=0))
+
+        from lib.kroki_autosave import daemon, common
+        handler = daemon.DeleteHandler(
+            vault_path=vault,
+            project_lookup=lambda p: common.infer_project_from_path(p, vault),
+            notify_on_delete=False,
+        )
+        handler.handle_delete(src)
+        # notify-send not invoked
+        assert all(a[0][0] != "notify-send" for a in calls)

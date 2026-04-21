@@ -259,3 +259,53 @@ class StageContext:
             logger.error("stage_file: copy to %s failed: %s", target, e)
             return None
         return target
+
+
+# ============================================================================
+# Delete handler
+# ============================================================================
+
+@dataclass
+class DeleteHandler:
+    vault_path: Path
+    project_lookup: Callable[[Path], str]
+    notify_on_delete: bool
+
+    def handle_delete(self, source_path: Path) -> None:
+        source_path = Path(source_path)
+        if common.should_skip(source_path):
+            return
+        try:
+            project = self.project_lookup(source_path)
+        except ValueError:
+            return
+
+        # Look up the most-recent autosave for this source
+        basename = source_path.stem
+        proj_dir = common.autosaves_root() / project
+        last_ts = "(none)"
+        if proj_dir.is_dir():
+            matches: List[str] = []
+            for entry in proj_dir.iterdir():
+                try:
+                    b, ts, _ = common.parse_autosave_filename(entry.name)
+                    if b == basename:
+                        matches.append(ts)
+                except ValueError:
+                    continue
+            if matches:
+                last_ts = max(matches)  # lexicographic max on ISO compact
+
+        body = (
+            f"{source_path.name} deleted. Last autosave: {last_ts}. "
+            f"Recover: kroki-autosave restore {source_path}"
+        )
+        if self.notify_on_delete:
+            common.notify_and_log("kroki-autosave DELETE", body)
+        else:
+            # Still write to notifications.log for audit trail
+            log_path = common.state_dir() / "notifications.log"
+            common.state_dir().mkdir(parents=True, exist_ok=True)
+            with log_path.open("a") as fh:
+                ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                fh.write(f"{ts} kroki-autosave DELETE {source_path} last_autosave={last_ts}\n")
