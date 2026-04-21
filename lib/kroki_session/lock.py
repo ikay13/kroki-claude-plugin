@@ -46,7 +46,12 @@ def write_lock(source_path: Optional[str]) -> dict:
 
 
 def read_lock() -> Optional[dict]:
-    raise NotImplementedError
+    try:
+        with open(LOCK_PATH, "r", encoding="utf-8") as fp:
+            content = fp.read()
+    except FileNotFoundError:
+        return None
+    return json.loads(content)
 
 
 def clear_lock() -> bool:

@@ -1021,6 +1021,46 @@ class TestSnapshot:
 class TestLock:
     """Tests for lib.kroki_session.lock — editor lock lifecycle."""
 
+    def test_read_absent_returns_none(self, tmp_path, monkeypatch):
+        """U6 — no lock file → None."""
+        from lib.kroki_session import lock
+        monkeypatch.setattr(lock, "LOCK_PATH", tmp_path / ".active-editor.lock")
+        assert lock.read_lock() is None
+
+    def test_read_fresh_returns_dict(self, tmp_path, monkeypatch):
+        """Happy path — fresh lock returns parsed dict."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        ts = datetime.now(timezone.utc).isoformat()
+        lock_path.write_text(json.dumps({"source_path": "/x/y.puml", "started_at": ts}))
+
+        result = lock.read_lock()
+        assert result is not None
+        assert result["source_path"] == "/x/y.puml"
+        assert result["started_at"] == ts
+
+    def test_read_unknown_keys_tolerated(self, tmp_path, monkeypatch):
+        """U19 — extra JSON keys are tolerated (forward compatibility)."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        ts = datetime.now(timezone.utc).isoformat()
+        lock_path.write_text(json.dumps({
+            "source_path": "/a.puml",
+            "started_at": ts,
+            "future_field": "tolerated",
+            "another": 42,
+        }))
+
+        result = lock.read_lock()
+        assert result is not None
+        assert result["source_path"] == "/a.puml"
+
     def test_module_importable_and_exports_api(self):
         from lib.kroki_session import lock
         # Core constants
