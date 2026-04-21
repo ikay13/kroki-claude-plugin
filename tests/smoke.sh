@@ -372,6 +372,40 @@ STUB
     fi
     (cd "$PLUGIN_DIR" && HOME="$ED_HOME" python3 -m lib.kroki_session.lock close) >/dev/null
 
+    # S7: editor-close.sh with lock held clears it and prints source reminder.
+    "$PLUGIN_DIR/scripts/editor-open.sh" "$ED_FIXTURE" >/dev/null
+    S7_OUTPUT="$ED_SCRATCH/s7.out"
+    if "$PLUGIN_DIR/scripts/editor-close.sh" >"$S7_OUTPUT" 2>&1; then
+        if [[ ! -f "$ED_LOCK" ]] && grep -q "$(realpath "$ED_FIXTURE")" "$S7_OUTPUT"; then
+            echo "  [OK]  S7: editor-close.sh with lock clears it; output mentions source path"
+        else
+            echo "  [FAIL] S7: lock still present or source path missing from output"
+            [[ -f "$ED_LOCK" ]] && echo "  (lock still exists)"
+            cat "$S7_OUTPUT"
+            exit 1
+        fi
+    else
+        echo "  [FAIL] S7: editor-close.sh exited nonzero while lock held"
+        cat "$S7_OUTPUT"
+        exit 1
+    fi
+
+    # S8: editor-close.sh with no lock.
+    S8_OUTPUT="$ED_SCRATCH/s8.out"
+    if "$PLUGIN_DIR/scripts/editor-close.sh" >"$S8_OUTPUT" 2>&1; then
+        if grep -q "No lock was held" "$S8_OUTPUT"; then
+            echo "  [OK]  S8: editor-close.sh with no lock prints 'No lock was held'"
+        else
+            echo "  [FAIL] S8: expected 'No lock was held' in output"
+            cat "$S8_OUTPUT"
+            exit 1
+        fi
+    else
+        echo "  [FAIL] S8: editor-close.sh exited nonzero with no lock (should be idempotent)"
+        cat "$S8_OUTPUT"
+        exit 1
+    fi
+
     # Restore environment.
     if [[ "$SAVED_HOME" != "" ]]; then export HOME="$SAVED_HOME"; else unset HOME; fi
     export PATH="$SAVED_PATH"
