@@ -45,13 +45,62 @@ def write_lock(source_path: Optional[str]) -> dict:
     raise NotImplementedError
 
 
+def _rename_corrupt_lock(reason: str) -> None:
+    """Move the current lock file aside for forensic inspection."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    target = LOCK_PATH.with_name(f"{LOCK_PATH.name}.corrupt.{ts}")
+    try:
+        os.rename(LOCK_PATH, target)
+        print(f"lock.py: corrupt lock moved to {target} ({reason})", file=sys.stderr)
+    except FileNotFoundError:
+        pass  # Already gone; nothing to rename.
+
+
 def read_lock() -> Optional[dict]:
     try:
         with open(LOCK_PATH, "r", encoding="utf-8") as fp:
             content = fp.read()
     except FileNotFoundError:
         return None
-    return json.loads(content)
+
+    try:
+        lock_dict = json.loads(content)
+    except json.JSONDecodeError:
+        _rename_corrupt_lock("JSONDecodeError")
+        return None
+
+    if not isinstance(lock_dict, dict) or "source_path" not in lock_dict or "started_at" not in lock_dict:
+        _rename_corrupt_lock("missing required keys")
+        return None
+
+    # Clock-skew check: future started_at is logged but treated as fresh.
+    started_at_str = lock_dict["started_at"]
+    try:
+        started_at = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        _rename_corrupt_lock("unparseable started_at")
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if started_at > now:
+        print(
+            f"lock.py: warning: started_at is in the future "
+            f"(clock skew?); treating as fresh. started_at={started_at_str}",
+            file=sys.stderr,
+        )
+        return lock_dict
+
+    if is_stale(lock_dict):
+        age_hours = (now - started_at).total_seconds() / 3600
+        try:
+            os.unlink(LOCK_PATH)
+        except FileNotFoundError:
+            pass
+        print(f"lock.py: stale lock auto-cleared (age: {age_hours:.1f}h)", file=sys.stderr)
+        return None
+
+    return lock_dict
 
 
 def clear_lock() -> bool:

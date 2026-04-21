@@ -1122,3 +1122,62 @@ class TestLock:
         monkeypatch.setattr(lock, "datetime", FrozenDatetime)
         future_ts = (fixed_now + timedelta(hours=1)).isoformat()
         assert lock.is_stale({"started_at": future_ts, "source_path": None}) is False
+
+    def test_read_stale_auto_clears(self, tmp_path, monkeypatch, capsys):
+        """U7 — stale lock (>2h) unlinks and returns None with stderr log."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone, timedelta
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        lock_path.write_text(json.dumps({"source_path": "/s.puml", "started_at": stale_ts}))
+
+        assert lock.read_lock() is None
+        assert not lock_path.exists()
+        captured = capsys.readouterr()
+        assert "stale lock auto-cleared" in captured.err
+
+    def test_read_corrupt_renames_and_returns_none(self, tmp_path, monkeypatch, capsys):
+        """U8 — malformed JSON → renamed to .corrupt.<iso-ts>, returns None."""
+        from lib.kroki_session import lock
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        lock_path.write_text("this is not valid json {{{")
+
+        assert lock.read_lock() is None
+        assert not lock_path.exists()
+        corrupt_files = list(tmp_path.glob(".active-editor.lock.corrupt.*"))
+        assert len(corrupt_files) == 1
+        assert corrupt_files[0].read_text() == "this is not valid json {{{"
+        captured = capsys.readouterr()
+        assert "corrupt lock moved to" in captured.err
+
+    def test_read_missing_required_keys_also_renames(self, tmp_path, monkeypatch):
+        """U8 extension — JSON valid but required keys missing also triggers rename."""
+        from lib.kroki_session import lock
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        lock_path.write_text(json.dumps({"something_else": 1}))
+
+        assert lock.read_lock() is None
+        assert not lock_path.exists()
+        assert list(tmp_path.glob(".active-editor.lock.corrupt.*"))
+
+    def test_read_clock_skew_treats_as_fresh(self, tmp_path, monkeypatch, capsys):
+        """U9 — future started_at is tolerated (warns, returns dict)."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone, timedelta
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        future_ts = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        lock_path.write_text(json.dumps({"source_path": "/f.puml", "started_at": future_ts}))
+
+        result = lock.read_lock()
+        assert result is not None
+        assert result["source_path"] == "/f.puml"
+        captured = capsys.readouterr()
+        assert "clock skew" in captured.err.lower()
