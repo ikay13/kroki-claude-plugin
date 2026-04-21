@@ -324,3 +324,143 @@ common.notify_and_log('critical',
 fi
 
 echo "pod healthy after restart"
+
+# --- Step 7: POST-UPGRADE SMOKE ---------------------------------------------
+
+echo
+echo "--- Step 7: post-upgrade smoke ---"
+
+run_full_smoke_to_json() {
+    local out="$1"
+    local tmp="$(mktemp)"
+    "$PLUGIN_ROOT/tests/smoke.sh" --full > "$tmp" 2>&1 || true
+    python3 - "$tmp" "$out" <<'PYEOF'
+import json, re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+result = {}
+for m in re.finditer(r'^(PASS|FAIL):\s*(\S+)', text, re.M):
+    result[m.group(2)] = m.group(1).lower()
+Path(sys.argv[2]).write_text(json.dumps(result))
+PYEOF
+    rm -f "$tmp"
+}
+
+POST_SMOKE_JSON="$(mktemp --suffix=.json)"
+run_full_smoke_to_json "$POST_SMOKE_JSON"
+
+NEW_FAILURES="$(python3 - <<PYEOF
+import json
+from pathlib import Path
+from lib.kroki_container import common, upgrade as u
+
+baseline_state = common.read_state(".upgrade-last-smoke.json") or {}
+baseline = baseline_state.get("pre_upgrade_fixtures", {})
+post = json.loads(Path("$POST_SMOKE_JSON").read_text())
+print(" ".join(u.compute_new_failures(baseline, post)))
+PYEOF
+)"
+
+if [[ -n "$NEW_FAILURES" ]]; then
+    echo "new failures on first post-smoke: $NEW_FAILURES"
+    echo "retrying full smoke once..."
+    run_full_smoke_to_json "$POST_SMOKE_JSON"
+    NEW_FAILURES_RETRY="$(python3 - <<PYEOF
+import json
+from pathlib import Path
+from lib.kroki_container import common, upgrade as u
+
+baseline_state = common.read_state(".upgrade-last-smoke.json") or {}
+baseline = baseline_state.get("pre_upgrade_fixtures", {})
+post = json.loads(Path("$POST_SMOKE_JSON").read_text())
+print(" ".join(u.compute_new_failures(baseline, post)))
+PYEOF
+    )"
+    if [[ -n "$NEW_FAILURES_RETRY" ]]; then
+        echo "still failing after retry — TRIGGER B ROLLBACK"
+        _rollback_from_last_good
+        python3 -c "
+from lib.kroki_container import common
+common.notify_and_log('critical',
+    'Kroki upgrade rolled back',
+    'Trigger: smoke regression. New failures after retry: $NEW_FAILURES_RETRY. '
+    'Reverted to :last-good. Current pod state: healthy.',
+    suggested_cmds=['cat $LOG_FILE'])
+"
+        trap - INT TERM
+        rm -f "$POST_SMOKE_JSON"
+        exit 1
+    fi
+    echo "retry recovered — proceeding"
+fi
+rm -f "$POST_SMOKE_JSON"
+
+# --- Step 8: POST-UPGRADE PYTEST --------------------------------------------
+
+echo
+echo "--- Step 8: post-upgrade pytest ---"
+
+if ! python3 -m pytest "$PLUGIN_ROOT/tests/" -q; then
+    PYTEST_RC=$?
+    echo "pytest failed ($PYTEST_RC) — TRIGGER C ROLLBACK"
+    _rollback_from_last_good
+    python3 -c "
+from lib.kroki_container import common
+common.notify_and_log('critical',
+    'Kroki upgrade rolled back',
+    'Trigger: pytest regression. Reverted to :last-good. Current pod state: healthy.',
+    suggested_cmds=['cat $LOG_FILE'])
+"
+    trap - INT TERM
+    exit 1
+fi
+
+# --- Step 9: COMMIT (success) ------------------------------------------------
+
+echo
+echo "--- Step 9: commit ---"
+
+trap - INT TERM
+
+# Refresh baseline to reflect post-upgrade cache state
+python3 - <<'PYEOF'
+from lib.kroki_container import common, version_check
+mapping = common.read_state(".last-good-mapping.json") or {}
+baseline = {}
+for ref in mapping:
+    d = version_check.inspect_local_digest(ref)
+    if d:
+        baseline[ref] = d
+common.write_state(".version-baseline.json", baseline)
+PYEOF
+
+# Clean transient state
+rm -f "$STATE_DIR/.upgrade-last-smoke.json"
+rm -f "$STATE_DIR/.upgrade-in-progress"
+
+# Count skipped local images
+SKIPPED_COUNT="$(python3 -c "
+import json
+from lib.kroki_container import common, version_check, upgrade
+pod_images = version_check.discover_pod_images('$POD_NAME')
+local = [ref for ref in pod_images if not upgrade.is_upstream(ref)]
+print(len(local))
+")"
+
+UPSTREAM_COUNT="$(python3 -c "
+from lib.kroki_container import common
+m = common.read_state('.last-good-mapping.json') or {}
+print(len(m))
+")"
+
+python3 -c "
+from lib.kroki_container import common
+body = f'Upgraded $UPSTREAM_COUNT upstream image(s). All smoke + pytest pass.'
+if $SKIPPED_COUNT > 0:
+    body += f' Note: $SKIPPED_COUNT locally-built image(s) were skipped; rebuild manually if their base changed.'
+common.notify_and_log('info', 'Kroki upgrade complete', body)
+"
+
+echo
+echo "=== UPGRADE COMPLETE ==="
+echo "log: $LOG_FILE"
