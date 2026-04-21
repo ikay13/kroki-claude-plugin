@@ -1321,3 +1321,74 @@ class TestLock:
         assert result.blocks_target is False
         assert result.reason == "locked-other-file"
         assert result.source_path == locked_file
+
+    def _run_cli(self, monkeypatch, lock_path, *args, input_str: str = ""):
+        """Helper: spawn the lock CLI as a subprocess with lock path isolated."""
+        env = os.environ.copy()
+        env["HOME"] = str(lock_path.parent.parent)  # So Path.home()/.kroki-plugin/... matches lock_path
+        proc = subprocess.run(
+            [sys.executable, "-m", "lib.kroki_session.lock", *args],
+            cwd="/home/orin/kroki-claude-plugin/.worktrees/plan-5c-editor-lock",
+            env=env,
+            input=input_str,
+            capture_output=True,
+            text=True,
+        )
+        return proc
+
+    def test_cli_open_success_and_held(self, tmp_path, monkeypatch):
+        """U16 — CLI `open --source X` exits 0; second open exits 3."""
+        kroki_dir = tmp_path / ".kroki-plugin"
+        kroki_dir.mkdir()
+        lock_path = kroki_dir / ".active-editor.lock"
+
+        p1 = self._run_cli(monkeypatch, lock_path, "open", "--source", "/abs/x.puml")
+        assert p1.returncode == 0, p1.stderr
+        assert lock_path.exists()
+
+        p2 = self._run_cli(monkeypatch, lock_path, "open", "--source", "/abs/y.puml")
+        assert p2.returncode == 3, p2.stderr
+        assert "held" in p2.stderr.lower() or "lock" in p2.stderr.lower()
+
+    def test_cli_close_idempotent(self, tmp_path, monkeypatch):
+        """U17 — `close` exits 0 whether lock exists or not; stdout is JSON of removed lock or empty."""
+        kroki_dir = tmp_path / ".kroki-plugin"
+        kroki_dir.mkdir()
+        lock_path = kroki_dir / ".active-editor.lock"
+
+        # No lock → exit 0, stdout empty.
+        p1 = self._run_cli(monkeypatch, lock_path, "close")
+        assert p1.returncode == 0
+        assert p1.stdout.strip() == ""
+
+        # With lock → exit 0, stdout contains the removed lock's JSON.
+        self._run_cli(monkeypatch, lock_path, "open", "--source", "/abs/y.puml")
+        p2 = self._run_cli(monkeypatch, lock_path, "close")
+        assert p2.returncode == 0
+        parsed = json.loads(p2.stdout)
+        assert parsed["source_path"] == "/abs/y.puml"
+
+    def test_cli_check_exit_codes(self, tmp_path, monkeypatch):
+        """U18 — `check --source X`: 0 for ok / other-file / blank; 2 for on-target."""
+        kroki_dir = tmp_path / ".kroki-plugin"
+        kroki_dir.mkdir()
+        lock_path = kroki_dir / ".active-editor.lock"
+
+        # No lock → exit 0.
+        p1 = self._run_cli(monkeypatch, lock_path, "check", "--source", "/x.puml")
+        assert p1.returncode == 0
+
+        # Lock on different source → exit 0.
+        self._run_cli(monkeypatch, lock_path, "open", "--source", "/a.puml")
+        p2 = self._run_cli(monkeypatch, lock_path, "check", "--source", "/b.puml")
+        assert p2.returncode == 0
+
+        # Lock on matching source → exit 2.
+        p3 = self._run_cli(monkeypatch, lock_path, "check", "--source", "/a.puml")
+        assert p3.returncode == 2
+
+        # Blank-session lock → any check source → exit 0.
+        self._run_cli(monkeypatch, lock_path, "close")
+        self._run_cli(monkeypatch, lock_path, "open")  # blank
+        p4 = self._run_cli(monkeypatch, lock_path, "check", "--source", "/anything.puml")
+        assert p4.returncode == 0

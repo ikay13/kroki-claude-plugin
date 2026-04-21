@@ -188,3 +188,63 @@ def check_editor_lock(source_path: str) -> LockCheckResult:
         source_path=locked_source,
         reason="locked-other-file",
     )
+
+
+def _cli_open(args) -> int:
+    try:
+        write_lock(args.source)
+        return 0
+    except LockHeldError as e:
+        held = e.held
+        print(
+            f"lock.py: editor lock already held for "
+            f"source_path={held.get('source_path')!r} "
+            f"since started_at={held.get('started_at')!r}. "
+            f"Run scripts/editor-close.sh to release.",
+            file=sys.stderr,
+        )
+        return 3
+    except OSError as e:
+        print(f"lock.py: failed to write lock: {e}", file=sys.stderr)
+        return 1
+
+
+def _cli_close(_args) -> int:
+    existing = read_lock()
+    if existing is None:
+        return 0
+    if clear_lock():
+        print(json.dumps(existing))
+    return 0
+
+
+def _cli_check(args) -> int:
+    result = check_editor_lock(args.source)
+    if result.blocks_target:
+        return 2
+    return 0
+
+
+def _main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python3 -m lib.kroki_session.lock")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_open = sub.add_parser("open", help="Write editor lock (optionally with --source)")
+    p_open.add_argument("--source", default=None, help="Absolute path to the source file being edited")
+    p_open.set_defaults(func=_cli_open)
+
+    p_close = sub.add_parser("close", help="Clear editor lock; prints JSON of removed lock to stdout")
+    p_close.set_defaults(func=_cli_close)
+
+    p_check = sub.add_parser("check", help="Check whether a render target is blocked by the lock")
+    p_check.add_argument("--source", required=True, help="Source path the render would process")
+    p_check.set_defaults(func=_cli_check)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(_main())
