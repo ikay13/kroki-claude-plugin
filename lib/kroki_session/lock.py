@@ -59,7 +59,17 @@ def write_lock(source_path: Optional[str]) -> dict:
     encoded = json.dumps(payload, indent=2) + "\n"
 
     def _attempt_excl_write() -> bool:
-        """Try O_EXCL create. Returns True on success, False on FileExistsError."""
+        """Try O_EXCL create. Returns True on success, False on FileExistsError.
+
+        Note: we deliberately use direct O_EXCL + os.write rather than
+        common.atomic_write's tmp+rename pattern. O_EXCL establishes exclusive
+        ownership of the final path in one syscall, which is the critical
+        property for a lock file. A crash between os.open() and os.write()
+        leaves an empty lock file, but read_lock() handles that via the
+        corrupt-rename path (JSONDecodeError → .corrupt.<ts> → return None),
+        so the next write_lock() will succeed. The design doc (§4.1) described
+        tmp+rename; this simpler variant is strictly more correct for locks.
+        """
         try:
             fd = os.open(LOCK_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
         except FileExistsError:

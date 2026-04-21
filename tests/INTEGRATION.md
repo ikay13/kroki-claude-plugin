@@ -271,5 +271,7 @@ unlocked once Plan 5 ships.
 
 ## Pass criteria
 
-All scenarios except #3 must PASS before tagging a release. #3 stays marked
-as blocked pending Plan 5.
+All scenarios except #3, #16, and #17 must PASS before tagging a release.
+#3 stays marked as blocked pending Plan 5. #16 and #17 require a local
+browser and a live Niolesk session; they are validated manually at first
+real use (see design known-limitation 10).

@@ -64,8 +64,13 @@ done
 # documented in the design doc (§8 Known limitations). Double-fire is benign.
 if [[ -f "$HOME/.kroki-plugin/.active-editor.lock" ]]; then
     PLUGIN_ROOT_FOR_GATE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    # Canonicalize SOURCE to absolute path BEFORE the subshell — otherwise a
+    # relative path would resolve against PLUGIN_ROOT_FOR_GATE (subshell cwd)
+    # instead of the caller's cwd, causing a fail-open mismatch against the
+    # lock's realpath'd source_path.
+    SOURCE_ABS_FOR_GATE="$(realpath "$SOURCE")"
     gate_rc=0
-    (cd "$PLUGIN_ROOT_FOR_GATE" && python3 -m lib.kroki_session.lock check --source "$SOURCE") || gate_rc=$?
+    (cd "$PLUGIN_ROOT_FOR_GATE" && python3 -m lib.kroki_session.lock check --source "$SOURCE_ABS_FOR_GATE") || gate_rc=$?
     case $gate_rc in
         0) : ;;  # ok / locked-other-file / blank-session — proceed.
         2)

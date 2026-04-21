@@ -1362,11 +1362,13 @@ class TestLock:
 
     def _run_cli(self, monkeypatch, lock_path, *args, input_str: str = ""):
         """Helper: spawn the lock CLI as a subprocess with lock path isolated."""
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent.parent
         env = os.environ.copy()
         env["HOME"] = str(lock_path.parent.parent)  # So Path.home()/.kroki-plugin/... matches lock_path
         proc = subprocess.run(
             [sys.executable, "-m", "lib.kroki_session.lock", *args],
-            cwd="/home/orin/kroki-claude-plugin/.worktrees/plan-5c-editor-lock",
+            cwd=str(repo_root),
             env=env,
             input=input_str,
             capture_output=True,
