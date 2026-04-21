@@ -183,6 +183,76 @@ TMREOF
     fi
 fi
 
+# Step 4b (NEW — Plan 5b): version-check systemd units.
+echo ""
+echo "[4b/5] kroki-version-check systemd units..."
+if ! command -v systemctl >/dev/null 2>&1; then
+    echo "  skipped (systemctl not available)"
+else
+    UNIT_DIR="$HOME/.config/systemd/user"
+    mkdir -p "$UNIT_DIR"
+
+    cat > "$UNIT_DIR/kroki-version-check.service" <<SVCEOF
+[Unit]
+Description=Kroki daily version check
+
+[Service]
+Type=oneshot
+ExecStart=$SCRIPT_DIR/version-check.sh
+SVCEOF
+
+    cat > "$UNIT_DIR/kroki-version-check.timer" <<TMREOF
+[Unit]
+Description=Run kroki-version-check daily
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1d
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TMREOF
+
+    systemctl --user daemon-reload
+
+    # Enable both timers (now that container-watchdog.sh + version-check.sh exist)
+    if [[ -x "$SCRIPT_DIR/container-watchdog.sh" ]]; then
+        systemctl --user enable --now kroki-watchdog.timer
+        echo "  enabled kroki-watchdog.timer"
+    fi
+    if [[ -x "$SCRIPT_DIR/version-check.sh" ]]; then
+        systemctl --user enable --now kroki-version-check.timer
+        echo "  enabled kroki-version-check.timer"
+    fi
+fi
+
+# Step 4c (NEW — Plan 5b): enable linger so user timers run logged-out.
+echo ""
+echo "[4c/5] enable-linger..."
+if ! command -v loginctl >/dev/null 2>&1; then
+    echo "  skipped (loginctl not available)"
+elif [[ "$(loginctl show-user "$USER" --property=Linger --value 2>/dev/null)" != "yes" ]]; then
+    if loginctl enable-linger "$USER" 2>/dev/null; then
+        echo "  linger enabled for $USER"
+    else
+        echo "  WARNING: enable-linger failed (may require interactive auth). Timers will only run during login sessions."
+    fi
+else
+    echo "  linger already enabled"
+fi
+
+# Step 4d (NEW — Plan 5b): install ~/.local/bin CLI symlinks.
+echo ""
+echo "[4d/5] CLI symlinks in ~/.local/bin..."
+mkdir -p "$HOME/.local/bin"
+ln -sf "$SCRIPT_DIR/container-watchdog.sh" "$HOME/.local/bin/kroki-watchdog"
+ln -sf "$SCRIPT_DIR/version-check.sh"     "$HOME/.local/bin/kroki-version-check"
+ln -sf "$SCRIPT_DIR/upgrade.sh"           "$HOME/.local/bin/kroki-upgrade"
+if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
+    echo "  NOTE: \$HOME/.local/bin is not in \$PATH. Add it to ~/.bashrc or ~/.zshrc."
+fi
+
 # Step 5 — smoke test.
 echo ""
 echo "[5/5] smoke test..."
