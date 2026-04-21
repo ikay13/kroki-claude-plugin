@@ -93,8 +93,13 @@ if ! "$PLUGIN_ROOT/scripts/pod-health.sh" >/dev/null; then
 fi
 
 # ALL pre-flight checks passed. Write .upgrade-in-progress.
+# Install an EXIT trap that cleans the flag if the shell exits abnormally
+# (e.g., set -e after a failed Python subprocess) — the INT/TERM trap installed
+# later at step 4 does NOT fire on set -e exits. Explicit `trap - EXIT` at step 9
+# clears this trap on success so the flag cleanup there isn't double-counted.
 if [[ "$DRY_RUN" -eq 0 ]]; then
     echo "$$ $(date +%s)" > "$STATE_DIR/.upgrade-in-progress"
+    trap '_rc=$?; if [[ $_rc -ne 0 ]]; then rm -f "$STATE_DIR/.upgrade-in-progress"; fi' EXIT
 fi
 
 echo "pre-flight OK"
@@ -276,8 +281,9 @@ CHANGED_COUNT=$(echo "$PULL_REPORT" | tail -1 | python3 -c "import json,sys; pri
 if [[ "$CHANGED_COUNT" == "0" ]]; then
     echo
     echo "Already current — no upstream changes detected."
-    echo "Cleaning up :last-good tags (no rollback target needed this cycle)."
+    echo "Skipping restart (no new images); :last-good tags preserved."
     trap - INT TERM
+    trap - EXIT
     rm -f "$STATE_DIR/.upgrade-in-progress"
     exit 0
 fi
@@ -421,6 +427,7 @@ echo
 echo "--- Step 9: commit ---"
 
 trap - INT TERM
+trap - EXIT   # success path — cleanup below handles .upgrade-in-progress explicitly
 
 # Refresh baseline to reflect post-upgrade cache state
 python3 - <<'PYEOF'

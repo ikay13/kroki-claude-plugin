@@ -186,7 +186,9 @@ fi
 # Step 4b (NEW — Plan 5b): version-check systemd units.
 echo ""
 echo "[4b/5] kroki-version-check systemd units..."
-if ! command -v systemctl >/dev/null 2>&1; then
+if $SKIP_SYSTEMD; then
+    echo "  skipped (--skip-systemd)"
+elif ! command -v systemctl >/dev/null 2>&1; then
     echo "  skipped (systemctl not available)"
 else
     UNIT_DIR="$HOME/.config/systemd/user"
@@ -216,11 +218,7 @@ TMREOF
 
     systemctl --user daemon-reload
 
-    # Enable both timers (now that container-watchdog.sh + version-check.sh exist)
-    if [[ -x "$SCRIPT_DIR/container-watchdog.sh" ]]; then
-        systemctl --user enable --now kroki-watchdog.timer
-        echo "  enabled kroki-watchdog.timer"
-    fi
+    # Enable version-check.timer. (kroki-watchdog.timer is enabled in step 4.)
     if [[ -x "$SCRIPT_DIR/version-check.sh" ]]; then
         systemctl --user enable --now kroki-version-check.timer
         echo "  enabled kroki-version-check.timer"
