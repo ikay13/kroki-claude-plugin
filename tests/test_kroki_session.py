@@ -896,6 +896,44 @@ class TestEnd:
         assert "fresh" in td  # added
         assert td == sorted(set(td))  # sorted, deduplicated
 
+    def test_end_skip_locked_sources_helper(self, tmp_path, monkeypatch):
+        """E1 — _skip_locked_sources filters out sources matching the editor lock."""
+        from lib.kroki_session import end, lock
+        from datetime import datetime, timezone
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+
+        # Create three source paths (files need not exist for abspath comparison).
+        sources = [tmp_path / f"d-{i}.puml" for i in range(3)]
+        for s in sources:
+            s.write_text("@startuml\nA -> B\n@enduml\n")
+        locked = sources[1]
+
+        lock_path.write_text(json.dumps({
+            "source_path": str(locked.resolve()),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }))
+
+        to_render, skipped = end._skip_locked_sources(sources)
+        assert str(locked) in skipped or str(locked.resolve()) in skipped
+        assert len(to_render) == 2
+        assert sources[0] in to_render
+        assert sources[2] in to_render
+
+    def test_end_skip_locked_sources_no_lock(self, tmp_path, monkeypatch):
+        """E2 — no lock → all sources pass through."""
+        from lib.kroki_session import end, lock
+
+        monkeypatch.setattr(lock, "LOCK_PATH", tmp_path / ".active-editor.lock")
+        sources = [tmp_path / f"d-{i}.puml" for i in range(3)]
+        for s in sources:
+            s.write_text("@startuml\nA -> B\n@enduml\n")
+
+        to_render, skipped = end._skip_locked_sources(sources)
+        assert len(to_render) == 3
+        assert len(skipped) == 0
+
 
 class TestSnapshot:
     """milestone snapshot behaviors — snapshot.py"""

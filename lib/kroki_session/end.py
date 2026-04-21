@@ -14,6 +14,29 @@ _PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 _SCRIPTS = _PLUGIN_ROOT / "scripts"
 
 
+def _skip_locked_sources(sources):
+    """Filter sources through the editor lock.
+
+    Returns (to_render, skipped) where:
+      - to_render: sources not blocked by the lock
+      - skipped: stringified source paths that were blocked (source matches lock.source_path)
+    """
+    from lib.kroki_session.common import check_editor_lock
+    to_render = []
+    skipped = []
+    for src in sources:
+        result = check_editor_lock(str(src))
+        if result.blocks_target:
+            skipped.append(str(src))
+            print(
+                f"end.py: skipping {src} — editor lock active on this file",
+                file=sys.stderr,
+            )
+        else:
+            to_render.append(src)
+    return to_render, skipped
+
+
 def main(
     project: str,
     auto: bool = False,
@@ -95,7 +118,11 @@ def main(
     # Step 7: per-diagram render loop
     successes: list[dict] = []
     failures: list[dict] = []
-    for src in list(changes["modified"]) + list(changes["new"]):
+    # Step 7a: filter sources through editor lock (Plan 5c).
+    sources_to_render, skipped_due_to_editor_lock = _skip_locked_sources(
+        list(changes["modified"]) + list(changes["new"])
+    )
+    for src in sources_to_render:
         try:
             render_result = subprocess.run(
                 [str(_SCRIPTS / "render.sh"), str(src), "--mode", "dual"],
@@ -230,6 +257,12 @@ def main(
     rendered_line = f"rendered: {len(successes)}/{max(total, 1)} ({len(failures)} failure(s))"
     print(f"kroki-session(mode=end, project={project}):", file=sys.stderr)
     print(f"  {rendered_line}", file=sys.stderr)
+    if skipped_due_to_editor_lock:
+        print(
+            f"  skipped (editor lock): {len(skipped_due_to_editor_lock)}: "
+            f"{', '.join(skipped_due_to_editor_lock)}",
+            file=sys.stderr,
+        )
     if failures:
         print("  failures:", file=sys.stderr)
         for f in failures:
