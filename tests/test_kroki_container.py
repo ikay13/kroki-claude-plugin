@@ -242,3 +242,132 @@ class TestTierFiredState:
             state={"tier1_fired_at": 1000, "tier2_fired_at": None},
         )
         assert result == {"tier1_fired_at": 1000, "tier2_fired_at": None}
+
+
+class TestWatchdogCycle:
+    def _setup(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        # Touch .last-use with an old timestamp — watchdog reads this
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 10000))
+
+    def test_disabled_in_config_is_noop(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / "config.yml").write_text("watchdog:\n  enabled: false\n")
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 100000))  # very old
+        from lib.kroki_container import watchdog
+        with patch("subprocess.run") as mock_run:
+            assert watchdog.cycle() == 0
+        # No notify-send, no kroki.sh down
+        calls = [call for call in mock_run.call_args_list
+                 if len(call[0]) > 0 and (
+                     call[0][0][0] in ("notify-send", "kroki.sh") or
+                     "kroki.sh" in " ".join(str(a) for a in call[0][0]))]
+        assert len(calls) == 0
+
+    def test_editor_lock_held_defers_silently(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 100000))
+        # simulate active editor lock — not stale
+        lock_payload = {
+            "source_path": "/x/y.puml",
+            "started_at": int(time.time()),
+            "pid": 12345,
+            "share_url": "http://localhost:8017/#abc",
+        }
+        (tmp_path / ".active-editor.lock").write_text(json.dumps(lock_payload))
+        from lib.kroki_container import watchdog
+        with patch("lib.kroki_container.watchdog.read_lock", return_value=lock_payload), \
+             patch("lib.kroki_container.watchdog.is_stale", return_value=False), \
+             patch("subprocess.run") as mock_run:
+            assert watchdog.cycle() == 0
+        # No kroki.sh down invoked
+        assert not any("kroki.sh" in " ".join(str(a) for a in call[0][0])
+                       for call in mock_run.call_args_list)
+
+    def test_upgrade_in_progress_defers(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 100000))
+        (tmp_path / ".upgrade-in-progress").write_text(f"{os.getpid()} {int(time.time())}")
+        from lib.kroki_container import watchdog
+        with patch("lib.kroki_container.watchdog.read_lock", return_value=None), \
+             patch("subprocess.run") as mock_run:
+            assert watchdog.cycle() == 0
+        assert not any("kroki.sh" in " ".join(str(a) for a in call[0][0])
+                       for call in mock_run.call_args_list)
+
+    def test_snooze_active_defers(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 100000))
+        snooze_until = int(time.time()) + 3600  # 1h in future
+        (tmp_path / ".watchdog-snooze-until").write_text(str(snooze_until))
+        from lib.kroki_container import watchdog
+        with patch("lib.kroki_container.watchdog.read_lock", return_value=None), \
+             patch("subprocess.run") as mock_run:
+            assert watchdog.cycle() == 0
+
+    def test_snooze_expired_clears_file(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 100))  # recent
+        (tmp_path / ".watchdog-snooze-until").write_text(str(int(time.time()) - 60))  # expired
+        from lib.kroki_container import watchdog
+        with patch("lib.kroki_container.watchdog.read_lock", return_value=None), \
+             patch("subprocess.run"):
+            watchdog.cycle()
+        assert not (tmp_path / ".watchdog-snooze-until").exists()
+
+    def test_tier1_fires_at_threshold(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 2 * 3600 - 60))  # ~2h1m idle
+        from lib.kroki_container import watchdog
+        with patch("lib.kroki_container.watchdog.read_lock", return_value=None), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            watchdog.cycle()
+        # tier-fired state should record tier1
+        state = json.loads((tmp_path / ".watchdog-tier-fired.json").read_text())
+        assert state["tier1_fired_at"] is not None
+        assert state["tier2_fired_at"] is None
+        # notify-send should have been called
+        assert any("notify-send" in call[0][0][0]
+                   for call in mock_run.call_args_list)
+
+    def test_tier1_dedup_second_cycle_does_not_refire(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        last_use = int(time.time()) - 3 * 3600
+        (tmp_path / ".last-use").write_text(str(last_use))
+        # tier1 already fired 30 min ago
+        (tmp_path / ".watchdog-tier-fired.json").write_text(
+            json.dumps({"tier1_fired_at": int(time.time()) - 1800, "tier2_fired_at": None})
+        )
+        from lib.kroki_container import watchdog
+        with patch("lib.kroki_container.watchdog.read_lock", return_value=None), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            watchdog.cycle()
+        # No new notify-send in this cycle
+        notify_calls = [c for c in mock_run.call_args_list
+                        if "notify-send" in c[0][0][0]]
+        assert len(notify_calls) == 0
+
+    def test_tier2_fires_and_stops_pod(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 6 * 3600 - 300))  # ~6h5m
+        from lib.kroki_container import watchdog
+        with patch("lib.kroki_container.watchdog.read_lock", return_value=None), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            watchdog.cycle()
+        # kroki.sh down invoked
+        assert any("kroki.sh" in " ".join(str(a) for a in c[0][0]) and "down" in str(c[0][0])
+                   for c in mock_run.call_args_list)
+        # tier2 recorded
+        state = json.loads((tmp_path / ".watchdog-tier-fired.json").read_text())
+        assert state["tier2_fired_at"] is not None
