@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -100,3 +101,90 @@ class TestStateIO:
         monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
         from lib.kroki_container import common
         common.clear_state(".nonexistent")  # must not raise
+
+
+class TestNetworkAvailable:
+    def test_curl_success_returns_true(self):
+        from lib.kroki_container import common
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            assert common.network_available() is True
+
+    def test_curl_failure_returns_false(self):
+        from lib.kroki_container import common
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=6)  # dns failure
+            assert common.network_available() is False
+
+    def test_curl_timeout_returns_false(self):
+        from lib.kroki_container import common
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("curl", 5)):
+            assert common.network_available() is False
+
+    def test_curl_missing_returns_false(self):
+        from lib.kroki_container import common
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            assert common.network_available() is False
+
+
+class TestNotifyAndLog:
+    def test_writes_json_line_to_log(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import common
+        with patch("subprocess.run"):  # suppress notify-send
+            common.notify_and_log("info", "Test", "Body here")
+        log = (tmp_path / "notifications.log").read_text().strip().splitlines()
+        assert len(log) == 1
+        entry = json.loads(log[0])
+        assert entry["level"] == "info"
+        assert entry["title"] == "Test"
+        assert "Body here" in entry["body"]
+
+    def test_includes_suggested_cmds(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import common
+        with patch("subprocess.run"):
+            common.notify_and_log(
+                "warning", "Idle", "Pod idle 2h",
+                suggested_cmds=["kroki-watchdog snooze 1h"],
+            )
+        log = (tmp_path / "notifications.log").read_text().strip().splitlines()
+        entry = json.loads(log[0])
+        assert "snooze 1h" in entry["body"]
+        assert entry["suggested_cmds"] == ["kroki-watchdog snooze 1h"]
+
+    def test_notify_send_missing_is_silent(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import common
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            common.notify_and_log("info", "Test", "Body")  # must not raise
+        log = (tmp_path / "notifications.log").read_text().strip().splitlines()
+        assert len(log) == 1  # log write still happened
+
+    def test_log_rotation_at_500_lines(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        log = tmp_path / "notifications.log"
+        log.write_text("\n".join(f'{{"ts":{i}}}' for i in range(501)) + "\n")
+        from lib.kroki_container import common
+        with patch("subprocess.run"):
+            common.notify_and_log("info", "Trigger", "body")
+        # After rotation: .1 file exists, .log has ≤500 lines
+        assert (tmp_path / "notifications.log.1").exists()
+        assert len((tmp_path / "notifications.log").read_text().splitlines()) <= 501
+
+    def test_dbus_env_repair(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+        # simulate XDG_RUNTIME_DIR/bus existing
+        bus = tmp_path / "bus"
+        bus.write_text("")
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        from lib.kroki_container import common
+        captured_env = {}
+        def fake_run(*args, **kwargs):
+            captured_env.update(kwargs.get("env", {}))
+            return MagicMock(returncode=0)
+        with patch("subprocess.run", side_effect=fake_run):
+            common.notify_and_log("info", "T", "B")
+        assert "DBUS_SESSION_BUS_ADDRESS" in captured_env
+        assert str(bus) in captured_env["DBUS_SESSION_BUS_ADDRESS"]
