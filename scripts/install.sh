@@ -251,6 +251,40 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
     echo "  NOTE: \$HOME/.local/bin is not in \$PATH. Add it to ~/.bashrc or ~/.zshrc."
 fi
 
+# ============================================================================
+# Plan 5d — Autosave daemon
+# ============================================================================
+
+# Step 4e — Staging dir (runs BEFORE 4f so service starts with correct perms)
+echo ""
+echo "[4e/5] Autosave staging directory..."
+mkdir -p ~/.kroki-plugin/autosaves
+chmod 700 ~/.kroki-plugin/autosaves
+echo "  ~/.kroki-plugin/autosaves/ exists with mode 700"
+
+# Step 4f — Install systemd user service
+echo ""
+echo "[4f/5] Systemd user service..."
+if [[ -z "${SKIP_SYSTEMD:-}" ]]; then
+    mkdir -p ~/.config/systemd/user
+    cp "$REPO_ROOT/systemd/kroki-autosave.service" \
+       ~/.config/systemd/user/kroki-autosave.service
+    cp "$REPO_ROOT/systemd/kroki-autosave-failed.service" \
+       ~/.config/systemd/user/kroki-autosave-failed.service
+    systemctl --user daemon-reload
+    systemctl --user enable --now kroki-autosave.service
+    echo "  kroki-autosave.service enabled and started"
+else
+    echo "  SKIP_SYSTEMD set — skipping systemd integration"
+fi
+
+# Step 4g — CLI symlink
+echo ""
+echo "[4g/5] CLI symlink for kroki-autosave..."
+mkdir -p ~/.local/bin
+ln -sf "$SCRIPT_DIR/kroki-autosave.sh" ~/.local/bin/kroki-autosave
+echo "  ~/.local/bin/kroki-autosave -> kroki-autosave.sh"
+
 # Step 5 — smoke test.
 echo ""
 echo "[5/5] smoke test..."
