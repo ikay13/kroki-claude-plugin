@@ -187,3 +187,140 @@ for ref in d['local_skipped']:
 "
     exit 0
 fi
+
+# --- rollback helper (used by trap + triggers A/B/C) ------------------------
+
+_rollback_from_last_good() {
+    echo
+    echo "!!! ROLLBACK — reverting :last-good tags !!!"
+    "$KROKI_SH" down --force 2>/dev/null || true
+    sleep 2
+    # Retag :last-good → :latest for each image in .last-good-mapping.json
+    python3 - <<'PYEOF'
+import json
+import subprocess
+from lib.kroki_container import common
+
+mapping = common.read_state(".last-good-mapping.json") or {}
+for ref, lg in mapping.items():
+    base = ref.rsplit(":", 1)[0]
+    latest_tag = f"{base}:latest"
+    print(f"  retag {lg} → {latest_tag}")
+    subprocess.run(["podman", "tag", lg, latest_tag], check=False)
+PYEOF
+    "$KROKI_SH" up
+    # Sanity re-run: if this also fails, trip circuit breaker
+    if ! "$PLUGIN_ROOT/scripts/pod-health.sh" >/dev/null; then
+        echo "$(date +%s)" > "$STATE_DIR/.pod-circuit-open"
+        python3 -c "
+from lib.kroki_container import common
+common.notify_and_log('critical',
+    'Kroki upgrade rolled back AND circuit tripped',
+    'Rollback completed but pod still unhealthy. Manual investigation required. '
+    'See forensic log: $LOG_FILE')
+"
+    fi
+    rm -f "$STATE_DIR/.upgrade-in-progress"
+}
+
+# --- Step 4: TAG :last-good --------------------------------------------------
+
+echo
+echo "--- Step 4: tag :last-good on upstream images ---"
+
+# Install trap for steps 4-8
+trap '_rollback_from_last_good; exit 130' INT TERM
+
+python3 - <<'PYEOF'
+import json
+import subprocess
+from lib.kroki_container import common
+
+mapping = common.read_state(".last-good-mapping.json") or {}
+for ref, lg in mapping.items():
+    print(f"  tag {ref} → {lg}")
+    r = subprocess.run(["podman", "tag", ref, lg], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"ERROR: podman tag failed for {ref}: {r.stderr}")
+PYEOF
+
+# --- Step 5: PULL NEW IMAGES -------------------------------------------------
+
+echo
+echo "--- Step 5: pull new images ---"
+
+PULL_REPORT="$(python3 - <<'PYEOF'
+import json
+import subprocess
+from lib.kroki_container import common, version_check
+
+mapping = common.read_state(".last-good-mapping.json") or {}
+pre = {ref: version_check.inspect_local_digest(ref) for ref in mapping}
+
+changed_count = 0
+for ref in mapping:
+    print(f"  pull {ref}")
+    r = subprocess.run(["podman", "pull", ref], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"ERROR: podman pull failed for {ref}: {r.stderr}")
+
+post = {ref: version_check.inspect_local_digest(ref) for ref in mapping}
+changed_count = sum(1 for ref in mapping if pre[ref] != post[ref])
+print(json.dumps({"changed_count": changed_count, "total": len(mapping)}))
+PYEOF
+)"
+
+echo "$PULL_REPORT" | tail -1
+CHANGED_COUNT=$(echo "$PULL_REPORT" | tail -1 | python3 -c "import json,sys; print(json.load(sys.stdin)['changed_count'])")
+
+if [[ "$CHANGED_COUNT" == "0" ]]; then
+    echo
+    echo "Already current — no upstream changes detected."
+    echo "Cleaning up :last-good tags (no rollback target needed this cycle)."
+    trap - INT TERM
+    rm -f "$STATE_DIR/.upgrade-in-progress"
+    exit 0
+fi
+
+# --- Step 6: POD RESTART -----------------------------------------------------
+
+echo
+echo "--- Step 6: pod restart ---"
+
+"$KROKI_SH" down || true
+sleep 2
+
+if ! "$KROKI_SH" up; then
+    echo "pod failed to come up — TRIGGER A ROLLBACK"
+    _rollback_from_last_good
+    python3 -c "
+from lib.kroki_container import common
+common.notify_and_log('critical',
+    'Kroki upgrade rolled back',
+    'Trigger: pod health. Pod did not start after pull. Reverted to :last-good.',
+    suggested_cmds=['cat $LOG_FILE'])
+"
+    trap - INT TERM
+    exit 1
+fi
+
+# Poll pod-health.sh for up to 60s
+if ! timeout 60 bash -c "
+while ! '$PLUGIN_ROOT/scripts/pod-health.sh' >/dev/null 2>&1; do
+    sleep 2
+done
+"; then
+    echo "pod-health.sh never succeeded within 60s — TRIGGER A ROLLBACK"
+    _rollback_from_last_good
+    python3 -c "
+from lib.kroki_container import common
+common.notify_and_log('critical',
+    'Kroki upgrade rolled back',
+    'Trigger: pod health. Pod came up but stayed unhealthy. Reverted to :last-good.',
+    suggested_cmds=['cat $LOG_FILE'])
+"
+    trap - INT TERM
+    exit 1
+fi
+
+echo "pod healthy after restart"
