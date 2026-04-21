@@ -5,7 +5,7 @@
 #   verify-install.sh [--vault-root PATH] [--rules-file PATH] [--state-dir PATH]
 #                     [--skip-systemd] [--skip-pod] [--skip-smoke]
 #
-# 18 checks (per design spec §14 + Plan 5b):
+# 21 checks (per design spec §14 + Plan 5b + Plan 5d):
 #   [1] CSS snippet exists in vault
 #   [2] session-continuity.md has kroki-session extension-point marker block (new)
 #   [3] state dir exists
@@ -24,6 +24,9 @@
 #   [16] linger enabled for $USER (Plan 5b)
 #   [17] lib.kroki_container is importable (Plan 5b)
 #   [18] ~/.local/bin CLI symlinks resolve and are executable (Plan 5b)
+#   [19] kroki-autosave.service is active (Plan 5d)
+#   [20] ~/.kroki-plugin/autosaves/ exists + mode 700 (Plan 5d)
+#   [21] ~/.local/bin/kroki-autosave resolves and is executable (Plan 5d)
 #
 # Exit codes:
 #   0 — all checks passed
@@ -240,6 +243,41 @@ if $CLI_SYMLINKS_OK; then
     check "~/.local/bin CLI symlinks resolve and are executable" ok
 else
     check "~/.local/bin CLI symlinks resolve and are executable" "one or more symlinks missing or not executable"
+fi
+
+# --- Plan 5d checks (autosave daemon) ----------------------------------------
+
+# [19] kroki-autosave.service is active.
+if [[ -n "${SKIP_SMOKE:-}" ]] || ! command -v systemctl >/dev/null 2>&1; then
+    echo "  [skip] kroki-autosave.service is active (SKIP_SMOKE set or systemctl unavailable)"
+elif systemctl --user is-active --quiet kroki-autosave.service 2>/dev/null; then
+    check "kroki-autosave.service is active" ok
+else
+    check "kroki-autosave.service is active" "service not active or not loaded"
+fi
+
+# [20] ~/.kroki-plugin/autosaves/ exists and is mode 700.
+if [[ -d "$HOME/.kroki-plugin/autosaves" ]]; then
+    MODE=$(stat -c "%a" "$HOME/.kroki-plugin/autosaves" 2>/dev/null)
+    if [[ "$MODE" == "700" ]]; then
+        check "~/.kroki-plugin/autosaves/ exists + mode 700" ok
+    else
+        check "~/.kroki-plugin/autosaves/ exists + mode 700" "mode is $MODE (want 700)"
+    fi
+else
+    check "~/.kroki-plugin/autosaves/ exists + mode 700" "$HOME/.kroki-plugin/autosaves/ does not exist"
+fi
+
+# [21] ~/.local/bin/kroki-autosave symlink resolves and is executable.
+if [[ -L "$HOME/.local/bin/kroki-autosave" ]]; then
+    TARGET=$(readlink "$HOME/.local/bin/kroki-autosave" 2>/dev/null)
+    if [[ -x "$TARGET" ]]; then
+        check "~/.local/bin/kroki-autosave resolves and is executable" ok
+    else
+        check "~/.local/bin/kroki-autosave resolves and is executable" "target $TARGET not executable"
+    fi
+else
+    check "~/.local/bin/kroki-autosave resolves and is executable" "symlink missing"
 fi
 
 echo ""
