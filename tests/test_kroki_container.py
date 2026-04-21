@@ -371,3 +371,53 @@ class TestWatchdogCycle:
         # tier2 recorded
         state = json.loads((tmp_path / ".watchdog-tier-fired.json").read_text())
         assert state["tier2_fired_at"] is not None
+
+
+class TestWatchdogSubcommands:
+    def test_snooze_writes_file(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import watchdog
+        assert watchdog.cmd_snooze("1h") == 0
+        raw = (tmp_path / ".watchdog-snooze-until").read_text().strip()
+        until = int(raw)
+        assert until >= int(time.time()) + 3500  # allow ~100s slop
+
+    def test_ignore_equals_snooze_24h(self, tmp_path, monkeypatch):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import watchdog
+        watchdog.cmd_ignore()
+        until = int((tmp_path / ".watchdog-snooze-until").read_text().strip())
+        assert until - int(time.time()) >= 24 * 3600 - 100
+
+    def test_unsnooze_removes_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".watchdog-snooze-until").write_text("9999999999")
+        from lib.kroki_container import watchdog
+        watchdog.cmd_unsnooze()
+        assert not (tmp_path / ".watchdog-snooze-until").exists()
+
+    def test_stop_invokes_kroki_down(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import watchdog
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            watchdog.cmd_stop()
+        assert any("kroki.sh" in " ".join(str(a) for a in c[0][0]) and "down" in str(c[0][0])
+                   for c in mock_run.call_args_list)
+
+    def test_status_prints_readable_report(self, tmp_path, monkeypatch, capsys):
+        import time
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        (tmp_path / ".last-use").write_text(str(int(time.time()) - 1800))
+        from lib.kroki_container import watchdog
+        watchdog.cmd_status()
+        out = capsys.readouterr().out
+        assert "idle" in out.lower()
+        assert "30" in out  # ~30 minutes idle
+
+    def test_snooze_rejects_malformed(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import watchdog
+        assert watchdog.cmd_snooze("never") != 0
