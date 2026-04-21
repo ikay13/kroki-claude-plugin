@@ -42,7 +42,49 @@ class LockHeldError(Exception):
 
 
 def write_lock(source_path: Optional[str]) -> dict:
-    raise NotImplementedError
+    """Atomically create the lock file. Raises LockHeldError if a non-stale lock already exists.
+
+    Behavior on collision:
+      1. Attempt O_EXCL create. If succeeds: write payload, return.
+      2. On FileExistsError: call read_lock() — this auto-cleans stale or corrupt locks.
+         - If read_lock returns None: retry O_EXCL create. Expected to succeed (cleanup ran).
+         - If read_lock returns a dict: lock is fresh and valid; raise LockHeldError.
+    """
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "source_path": source_path,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    encoded = json.dumps(payload, indent=2) + "\n"
+
+    def _attempt_excl_write() -> bool:
+        """Try O_EXCL create. Returns True on success, False on FileExistsError."""
+        try:
+            fd = os.open(LOCK_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            return False
+        try:
+            os.write(fd, encoded.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return True
+
+    if _attempt_excl_write():
+        return payload
+
+    # Collision. Let read_lock do its stale/corrupt cleanup.
+    existing = read_lock()
+    if existing is not None:
+        raise LockHeldError(existing)
+
+    # read_lock cleaned up; retry once.
+    if _attempt_excl_write():
+        return payload
+
+    # Something else is racing us. Reread to discover what.
+    existing = read_lock()
+    raise LockHeldError(existing or {"source_path": "<unknown>", "started_at": ""})
 
 
 def _rename_corrupt_lock(reason: str) -> None:

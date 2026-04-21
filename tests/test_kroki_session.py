@@ -1181,3 +1181,72 @@ class TestLock:
         assert result["source_path"] == "/f.puml"
         captured = capsys.readouterr()
         assert "clock skew" in captured.err.lower()
+
+    def test_write_creates_valid_schema(self, tmp_path, monkeypatch):
+        """U1 — write_lock creates file with required keys."""
+        from lib.kroki_session import lock
+
+        lock_path = tmp_path / "kroki-plugin" / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+
+        result = lock.write_lock("/abs/path/to/x.puml")
+        assert lock_path.exists()
+        loaded = json.loads(lock_path.read_text())
+        assert loaded["source_path"] == "/abs/path/to/x.puml"
+        assert "started_at" in loaded
+        assert result == loaded
+
+    def test_write_creates_parent_dir(self, tmp_path, monkeypatch):
+        """U5 — ~/.kroki-plugin/ auto-created if missing."""
+        from lib.kroki_session import lock
+
+        lock_path = tmp_path / "auto-created-dir" / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        assert not lock_path.parent.exists()
+        lock.write_lock(None)
+        assert lock_path.parent.is_dir()
+        assert lock_path.exists()
+
+    def test_write_raises_when_held_fresh(self, tmp_path, monkeypatch):
+        """U2 — fresh held lock raises LockHeldError with held dict attached."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        ts = datetime.now(timezone.utc).isoformat()
+        lock_path.write_text(json.dumps({"source_path": "/held.puml", "started_at": ts}))
+
+        with pytest.raises(lock.LockHeldError) as exc_info:
+            lock.write_lock("/new.puml")
+        assert exc_info.value.held["source_path"] == "/held.puml"
+        assert lock_path.exists()  # Original lock still intact.
+
+    def test_write_succeeds_after_stale_autoclean(self, tmp_path, monkeypatch):
+        """U3 — stale lock gets auto-cleaned, fresh write lands."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone, timedelta
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        lock_path.write_text(json.dumps({"source_path": "/stale.puml", "started_at": stale_ts}))
+
+        result = lock.write_lock("/new.puml")
+        loaded = json.loads(lock_path.read_text())
+        assert loaded["source_path"] == "/new.puml"
+        assert result["source_path"] == "/new.puml"
+
+    def test_write_succeeds_after_corrupt_rename(self, tmp_path, monkeypatch):
+        """U4 — corrupt lock renamed out, fresh write lands."""
+        from lib.kroki_session import lock
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        lock_path.write_text("not valid json {{{")
+
+        lock.write_lock("/fresh.puml")
+        loaded = json.loads(lock_path.read_text())
+        assert loaded["source_path"] == "/fresh.puml"
+        # Corrupt file preserved for forensics.
+        assert list(tmp_path.glob(".active-editor.lock.corrupt.*"))
