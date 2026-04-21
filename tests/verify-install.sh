@@ -152,6 +152,32 @@ else
     check "kroki-session entrypoints executable" "one of session-{start,end,snapshot}.sh not executable"
 fi
 
+# [11] editor-lock scripts (Plan 5c) executable.
+EDITOR_SCRIPTS_OK=true
+for s in "$REPO_ROOT"/scripts/editor-open.sh \
+         "$REPO_ROOT"/scripts/editor-close.sh; do
+    [[ -x "$s" ]] || EDITOR_SCRIPTS_OK=false
+done
+if $EDITOR_SCRIPTS_OK; then
+    check "editor-open.sh and editor-close.sh executable" ok
+else
+    check "editor-open.sh and editor-close.sh executable" "one of editor-{open,close}.sh missing or not executable"
+fi
+
+# [12] lock module importable.
+if (cd "$REPO_ROOT" && python3 -c "from lib.kroki_session import lock" 2>/dev/null); then
+    check "lib.kroki_session.lock imports cleanly" ok
+else
+    check "lib.kroki_session.lock imports cleanly" "import failed — broken plugin install"
+fi
+
+# [13] SKILL.md references the editor lock file.
+if grep -qF '.active-editor.lock' "$REPO_ROOT/skills/kroki/SKILL.md" 2>/dev/null; then
+    check "skills/kroki/SKILL.md references .active-editor.lock" ok
+else
+    check "skills/kroki/SKILL.md references .active-editor.lock" "no .active-editor.lock reference in SKILL.md"
+fi
+
 echo ""
 echo "Results: $pass ok, $fail fail"
 (( fail == 0 ))
