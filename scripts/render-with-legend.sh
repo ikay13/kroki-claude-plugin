@@ -57,6 +57,31 @@ done
 [[ -z "$SOURCE" ]] && usage
 [[ ! -f "$SOURCE" ]] && { echo "Error: source missing: $SOURCE" >&2; exit 3; }
 
+# --- Plan 5c editor lock gate ---
+# Short-circuit when no lock file present (zero subprocess overhead on common path).
+# Note: render.sh also has this gate. When render-with-legend.sh calls render.sh internally,
+# the gate will fire a second time there. This is the known "double-fire" limitation
+# documented in the design doc (§8 Known limitations). Double-fire is benign.
+if [[ -f "$HOME/.kroki-plugin/.active-editor.lock" ]]; then
+    PLUGIN_ROOT_FOR_GATE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    gate_rc=0
+    (cd "$PLUGIN_ROOT_FOR_GATE" && python3 -m lib.kroki_session.lock check --source "$SOURCE") || gate_rc=$?
+    case $gate_rc in
+        0) : ;;  # ok / locked-other-file / blank-session — proceed.
+        2)
+            echo "render-with-legend.sh: editor lock active on $SOURCE. Run scripts/editor-close.sh to release." >&2
+            exit 2
+            ;;
+        *)
+            echo "render-with-legend.sh: lock check failed unexpectedly (exit $gate_rc)." >&2
+            echo "Aborting to protect possible in-flight edits (fail-closed)." >&2
+            echo "To force-unblock: mv \"$HOME/.kroki-plugin/.active-editor.lock\" ~/.local/share/Trash/files/ and retry." >&2
+            exit 2
+            ;;
+    esac
+fi
+# --- end Plan 5c editor lock gate ---
+
 BASE="$(basename "$SOURCE")"
 NAME="${BASE%.*}"
 if [[ -z "$OUTPUT_DIR" ]]; then

@@ -527,8 +527,47 @@ PUML
         fi
     fi
 
-    # Clean up lock + scratch.
+    # R5: render-with-legend.sh sentinel-counter — measure gate-fire count.
+    # Wrap python3 via PATH to count invocations of "lib.kroki_session.lock check".
+    R5_SENTINEL="$RG_SCRATCH/sentinel"
+    mkdir -p "$R5_SENTINEL"
+    R5_COUNTER="$RG_SCRATCH/r5.counter"
+    : > "$R5_COUNTER"
+    cat > "$R5_SENTINEL/python3" <<STUB
+#!/usr/bin/env bash
+if [[ "\$*" == *"lib.kroki_session.lock check"* ]]; then
+    echo "fire" >> "$R5_COUNTER"
+fi
+exec /usr/bin/python3 "\$@"
+STUB
+    chmod +x "$R5_SENTINEL/python3"
+
+    # Write a lock on an UNRELATED source so the render proceeds but the gate still fires.
+    python3 -c "import json; from datetime import datetime, timezone; open('$RG_LOCK','w').write(json.dumps({'source_path': '/unrelated-source.puml', 'started_at': datetime.now(timezone.utc).isoformat()}))"
+
+    mkdir -p "$RG_SCRATCH/r5out"
+    R5_SAVED_PATH="$PATH"
+    export PATH="$R5_SENTINEL:$PATH"
+    R5_OUT="$RG_SCRATCH/r5.out"
+    # --mode single won't work with render-with-legend.sh (which renders dual internally).
+    # Use a passable source type (plantuml) and let it produce light+dark outputs.
+    KROKI_CLI="$RG_REAL_KROKI_CLI" "$PLUGIN_DIR/scripts/render-with-legend.sh" "$RG_SRC" --out "$RG_SCRATCH/r5out" --type plantuml >"$R5_OUT" 2>&1 || true
+    export PATH="$R5_SAVED_PATH"
+
+    R5_FIRES=$(wc -l < "$R5_COUNTER" 2>/dev/null || echo 0)
+    if [[ $R5_FIRES -le 2 ]]; then
+        # ≤ 2 fires is expected (known limitation #8: render-with-legend.sh gate fires once +
+        # internal render.sh call fires gate again = 2 total). Report the actual count.
+        echo "  [OK]  R5: gate fired $R5_FIRES time(s) (expected 1-2 per known-limitation 8 re: nested gate)"
+    else
+        echo "  [FAIL] R5: gate fired $R5_FIRES times, expected ≤ 2"
+        cat "$R5_OUT"
+        exit 1
+    fi
+
     rm -f "$RG_LOCK"
+
+    # Clean up lock + scratch.
     rm -rf "$RG_SCRATCH"
 
     # Restore HOME.
