@@ -21,6 +21,25 @@ See [trigger-phrases.md](references/trigger-phrases.md) for the full expandable 
 3. Save both the source file and rendered SVG to disk
 4. Return the file path to the user
 
+## Editor lock awareness
+
+Before any render, embed, or proactive diagram suggestion, check
+`~/.kroki-plugin/.active-editor.lock`. If present and not stale (<2h old):
+
+- **Do NOT proactively suggest or generate diagrams.** The user is editing
+  in Niolesk; stay out of their way.
+- **Syntax help is still allowed.** Questions about PlantUML / Mermaid /
+  etc. syntax, error diagnosis, and language recommendations are fine.
+- **Explicit user-requested renders are allowed** — except when the render
+  target matches the locked `source_path`; `render.sh` hard-blocks that
+  case independently via exit code 2.
+- **Blank-session locks** (`source_path: null`) affect only this soft
+  behavior — they do not hard-block any renders, because there's no file
+  to collide on.
+
+Lock is written by `scripts/editor-open.sh` and cleared by
+`scripts/editor-close.sh` (or auto-stale after 2h).
+
 ## How To Render
 
 Use the rendering script at the plugin root:
