@@ -188,3 +188,57 @@ class TestNotifyAndLog:
             common.notify_and_log("info", "T", "B")
         assert "DBUS_SESSION_BUS_ADDRESS" in captured_env
         assert str(bus) in captured_env["DBUS_SESSION_BUS_ADDRESS"]
+
+
+class TestIdleMath:
+    def test_idle_seconds_basic(self, monkeypatch):
+        from lib.kroki_container import watchdog
+        with patch("time.time", return_value=1000):
+            assert watchdog.compute_idle_seconds(last_use=700) == 300
+
+    def test_idle_seconds_future_last_use_clamps_to_zero(self, monkeypatch):
+        from lib.kroki_container import watchdog
+        with patch("time.time", return_value=1000):
+            # last_use in the future (clock skew) — don't report negative idle
+            assert watchdog.compute_idle_seconds(last_use=1500) == 0
+
+
+class TestTierFiredState:
+    def test_default_all_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import watchdog
+        s = watchdog.read_tier_fired_state()
+        assert s == {"tier1_fired_at": None, "tier2_fired_at": None}
+
+    def test_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import watchdog
+        watchdog.write_tier_fired_state({"tier1_fired_at": 100, "tier2_fired_at": None})
+        assert watchdog.read_tier_fired_state() == {"tier1_fired_at": 100, "tier2_fired_at": None}
+
+    def test_reset_if_pod_touched(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_container import watchdog
+        # last_use > tier1_fired_at → reset
+        result = watchdog.maybe_reset_tier_state(
+            last_use=2000,
+            state={"tier1_fired_at": 1000, "tier2_fired_at": None},
+        )
+        assert result == {"tier1_fired_at": None, "tier2_fired_at": None}
+
+    def test_no_reset_if_never_fired(self, tmp_path, monkeypatch):
+        from lib.kroki_container import watchdog
+        result = watchdog.maybe_reset_tier_state(
+            last_use=2000,
+            state={"tier1_fired_at": None, "tier2_fired_at": None},
+        )
+        assert result == {"tier1_fired_at": None, "tier2_fired_at": None}
+
+    def test_no_reset_if_last_use_older_than_fire(self, tmp_path, monkeypatch):
+        from lib.kroki_container import watchdog
+        # last_use <= tier1_fired_at → no reset; tier-fire is still "current"
+        result = watchdog.maybe_reset_tier_state(
+            last_use=500,
+            state={"tier1_fired_at": 1000, "tier2_fired_at": None},
+        )
+        assert result == {"tier1_fired_at": 1000, "tier2_fired_at": None}
