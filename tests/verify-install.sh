@@ -5,7 +5,7 @@
 #   verify-install.sh [--vault-root PATH] [--rules-file PATH] [--state-dir PATH]
 #                     [--skip-systemd] [--skip-pod] [--skip-smoke]
 #
-# 10 checks (per design spec §14):
+# 18 checks (per design spec §14 + Plan 5b):
 #   [1] CSS snippet exists in vault
 #   [2] session-continuity.md has kroki-session extension-point marker block (new)
 #   [3] state dir exists
@@ -16,6 +16,14 @@
 #   [8] old v0.9.0 kroki marker absent (migration completed)
 #   [9] session-log-schema.md has ## diagrams row
 #   [10] kroki-session bash entrypoints executable
+#   [11] editor-lock scripts executable
+#   [12] lib.kroki_session.lock imports cleanly
+#   [13] SKILL.md references .active-editor.lock
+#   [14] kroki-watchdog.timer is active (Plan 5b)
+#   [15] kroki-version-check.timer is active (Plan 5b)
+#   [16] linger enabled for $USER (Plan 5b)
+#   [17] lib.kroki_container is importable (Plan 5b)
+#   [18] ~/.local/bin CLI symlinks resolve and are executable (Plan 5b)
 #
 # Exit codes:
 #   0 — all checks passed
@@ -176,6 +184,62 @@ if grep -qF '.active-editor.lock' "$REPO_ROOT/skills/kroki/SKILL.md" 2>/dev/null
     check "skills/kroki/SKILL.md references .active-editor.lock" ok
 else
     check "skills/kroki/SKILL.md references .active-editor.lock" "no .active-editor.lock reference in SKILL.md"
+fi
+
+# --- Plan 5b checks ---------------------------------------------------------
+
+# [14] kroki-watchdog.timer is active.
+if $SKIP_SYSTEMD; then
+    echo "  [skip] kroki-watchdog.timer is active (--skip-systemd)"
+elif ! command -v systemctl >/dev/null 2>&1; then
+    echo "  [skip] kroki-watchdog.timer is active (systemctl unavailable)"
+elif systemctl --user is-active --quiet kroki-watchdog.timer 2>/dev/null; then
+    check "kroki-watchdog.timer is active" ok
+else
+    check "kroki-watchdog.timer is active" "timer not active or not loaded"
+fi
+
+# [15] kroki-version-check.timer is active.
+if $SKIP_SYSTEMD; then
+    echo "  [skip] kroki-version-check.timer is active (--skip-systemd)"
+elif ! command -v systemctl >/dev/null 2>&1; then
+    echo "  [skip] kroki-version-check.timer is active (systemctl unavailable)"
+elif systemctl --user is-active --quiet kroki-version-check.timer 2>/dev/null; then
+    check "kroki-version-check.timer is active" ok
+else
+    check "kroki-version-check.timer is active" "timer not active or not loaded"
+fi
+
+# [16] linger enabled for $USER.
+if ! command -v loginctl >/dev/null 2>&1; then
+    echo "  [skip] linger enabled for \$USER (loginctl unavailable)"
+elif [[ "$(loginctl show-user "$USER" --property=Linger --value 2>/dev/null)" == "yes" ]]; then
+    check "linger enabled for \$USER" ok
+else
+    check "linger enabled for \$USER" "loginctl show-user returned no or missing"
+fi
+
+# [17] lib.kroki_container is importable.
+if (cd "$REPO_ROOT" && PYTHONPATH=. python3 -c "from lib.kroki_container import watchdog, version_check, upgrade, common" 2>/dev/null); then
+    check "lib.kroki_container is importable" ok
+else
+    check "lib.kroki_container is importable" "import failed — check lib/kroki_container/ structure"
+fi
+
+# [18] ~/.local/bin CLI symlinks resolve and are executable.
+CLI_SYMLINKS_OK=true
+for bin in "$HOME/.local/bin/kroki-watchdog" \
+           "$HOME/.local/bin/kroki-version-check" \
+           "$HOME/.local/bin/kroki-upgrade"; do
+    if [[ ! -x "$bin" ]]; then
+        CLI_SYMLINKS_OK=false
+        break
+    fi
+done
+if $CLI_SYMLINKS_OK; then
+    check "~/.local/bin CLI symlinks resolve and are executable" ok
+else
+    check "~/.local/bin CLI symlinks resolve and are executable" "one or more symlinks missing or not executable"
 fi
 
 echo ""
