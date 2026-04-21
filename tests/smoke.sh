@@ -734,6 +734,48 @@ unset KROKI_STATE_DIR
 cleanup_v_block
 trap - EXIT
 
+# --- U-block: upgrade scenarios (Plan 5b) -----------------------------------
+
+ED_SCRATCH_U="$(mktemp -d)"
+export KROKI_STATE_DIR="$ED_SCRATCH_U"
+
+cleanup_u_block() {
+    [[ -d "$ED_SCRATCH_U" ]] && rm -rf "$ED_SCRATCH_U"
+    unset KROKI_STATE_DIR
+    return 0
+}
+trap cleanup_u_block EXIT
+
+run_test "U4: upgrade.sh --dry-run prints plan and exits 0" '
+    ./scripts/upgrade.sh --dry-run > $ED_SCRATCH_U/u4.out 2>&1
+    grep -q "DRY-RUN complete" $ED_SCRATCH_U/u4.out
+    # No .upgrade-in-progress written on dry-run
+    [[ ! -f $ED_SCRATCH_U/.upgrade-in-progress ]]
+'
+
+run_test "U3: editor lock held → upgrade.sh aborts w/ message" '
+    python3 -c "
+import json, os, time
+p = os.path.join(os.environ[\"KROKI_STATE_DIR\"], \".active-editor.lock\")
+json.dump({\"source_path\":\"/x.puml\",\"started_at\":int(time.time()),\"pid\":9999,\"share_url\":\"http://\"}, open(p,\"w\"))
+"
+    if ./scripts/upgrade.sh > $ED_SCRATCH_U/u3.out 2>&1; then
+        echo "upgrade.sh should have aborted"; exit 1
+    fi
+    grep -q "Active editor lock held" $ED_SCRATCH_U/u3.out
+    rm -f $ED_SCRATCH_U/.active-editor.lock
+'
+
+# U1, U2, U2a require a full upgrade cycle, which is expensive and impacts the
+# real pod. They are documented in INTEGRATION.md scenario 19 for manual run.
+# The smoke suite does NOT execute them to keep --full reproducible without
+# mutating container state.
+echo "[smoke] U1/U2/U2a — see tests/INTEGRATION.md scenario 19 (manual run)."
+
+unset KROKI_STATE_DIR
+cleanup_u_block
+trap - EXIT
+
 # Python unit tests (Plan 2)
 if command -v python3 >/dev/null 2>&1; then
     echo ""
