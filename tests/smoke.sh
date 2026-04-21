@@ -691,6 +691,49 @@ unset KROKI_STATE_DIR KROKI_SH
 cleanup_w_block
 trap - EXIT
 
+# --- V-block: version-check scenarios (Plan 5b) ----- ---------------------------
+# NOTE: These tests require network access to pull container images via podman.
+# If the environment lacks network connectivity, the version-check.sh script exits
+# early (line 118-120 in lib/kroki_container/version_check.py), and the tests will
+# fail with "network unavailable" or similar. This is expected in offline environments.
+
+ED_SCRATCH_V="$(mktemp -d)"
+export KROKI_STATE_DIR="$ED_SCRATCH_V"
+
+cleanup_v_block() {
+    [[ -d "$ED_SCRATCH_V" ]] && rm -rf "$ED_SCRATCH_V"
+    unset KROKI_STATE_DIR
+    return 0
+}
+trap cleanup_v_block EXIT
+
+run_test "V1: first run with no baseline → pulls + writes baseline + notifies" '
+    ./scripts/version-check.sh >/dev/null 2>&1 || true
+    [[ -f $ED_SCRATCH_V/.version-baseline.json ]]
+    python3 -c "import json; d = json.load(open(\"$ED_SCRATCH_V/.version-baseline.json\")); assert len(d) > 0, \"empty baseline\""
+'
+
+run_test "V2: second cycle with same digests → no notification" '
+    LOG_BEFORE=$(wc -l < $ED_SCRATCH_V/notifications.log 2>/dev/null || echo 0)
+    ./scripts/version-check.sh >/dev/null 2>&1 || true
+    LOG_AFTER=$(wc -l < $ED_SCRATCH_V/notifications.log 2>/dev/null || echo 0)
+    test "$LOG_BEFORE" -eq "$LOG_AFTER"
+'
+
+run_test "V3: defer 7d → subsequent cycle silent even with fake digest change" '
+    ./scripts/version-check.sh defer 7d >/dev/null 2>&1 || true
+    [[ -f $ED_SCRATCH_V/.version-baseline.json ]]
+    python3 -c "import json; from pathlib import Path; p = Path(\"$ED_SCRATCH_V/.version-baseline.json\"); d = json.loads(p.read_text()); d[list(d.keys())[0]] = \"sha256:fakeoldvalue\"; p.write_text(json.dumps(d))"
+    LOG_BEFORE=$(wc -l < $ED_SCRATCH_V/notifications.log 2>/dev/null || echo 0)
+    ./scripts/version-check.sh >/dev/null 2>&1 || true
+    LOG_AFTER=$(wc -l < $ED_SCRATCH_V/notifications.log 2>/dev/null || echo 0)
+    test "$LOG_BEFORE" -eq "$LOG_AFTER"
+'
+
+unset KROKI_STATE_DIR
+cleanup_v_block
+trap - EXIT
+
 # Python unit tests (Plan 2)
 if command -v python3 >/dev/null 2>&1; then
     echo ""
