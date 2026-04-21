@@ -269,6 +269,64 @@ unlocked once Plan 5 ships.
 
 **Pass criteria:** step 2 exits 2 with guidance; step 3 succeeds; step 5 succeeds after close.
 
+## Scenario 18 — 24-hour watchdog observation
+
+**Purpose:** Verify no spurious tier fires during normal daily use.
+
+**Steps:**
+1. Ensure plugin is installed (`./scripts/install.sh`) and pod is running.
+2. Use Claude + Kroki normally for a day.
+3. At the end of 24h, inspect `~/.kroki-plugin/notifications.log`:
+   ```
+   tail -50 ~/.kroki-plugin/notifications.log
+   ```
+4. Expected: no `"level": "warning"` entries during working hours when pod was actively used.
+5. If pod was left idle overnight (6h+), expect exactly one tier-1 and one tier-2 entry.
+
+**Pass criteria:** No spurious notifications during active use. Notifications during genuine idle follow the 2h/6h pattern.
+
+## Scenario 19 — Full upgrade cycle with real upstream bump
+
+**Purpose:** End-to-end validation of the rollback-safe upgrade path against real upstream images.
+
+**Steps (run only when an upstream Kroki version bump is announced):**
+1. `kroki-upgrade --dry-run` — review what would change. Expect: image list, local-skipped list, upstream digest comparisons.
+2. If the dry-run plan looks correct, run `kroki-upgrade`.
+3. Observe the ordered output:
+   - Step 1 pre-flight OK
+   - Step 2 baseline smoke
+   - Step 3 image discovery
+   - Step 4 tag :last-good
+   - Step 5 pull
+   - Step 6 pod restart + health poll
+   - Step 7 post-upgrade smoke (+ retry path if flake)
+   - Step 8 pytest
+   - Step 9 commit OR Step 10 rollback
+4. Check `~/.kroki-plugin/upgrade-<ts>.log` for the forensic trace.
+
+**Pass criteria:** commit path completes with "Kroki upgrade complete" notification AND smoke/pytest pass. OR rollback path completes cleanly with "Kroki upgrade rolled back" notification and pod healthy on `:last-good`.
+
+## Scenario 20 — Defer + re-notify cycle
+
+**Purpose:** Verify that skip + upstream change re-triggers notification.
+
+**Steps:**
+1. `kroki-version-check` — observe current baseline.
+2. `kroki-version-check skip` — sets far-future defer.
+3. Force-invalidate `.version-baseline.json` by editing one digest:
+   ```
+   python3 -c "
+   import json
+   from pathlib import Path
+   p = Path.home() / '.kroki-plugin' / '.version-baseline.json'
+   d = json.loads(p.read_text())
+   k = next(iter(d)); d[k] = 'sha256:fakepriorvalue'
+   p.write_text(json.dumps(d))"
+   ```
+4. `kroki-version-check` — re-pulls, detects the "change" (vs tampered baseline), and because the digest_set_hash no longer matches the skip-deferred hash, a fresh notification fires.
+
+**Pass criteria:** `notifications.log` gains a new "upgrade available" entry in step 4.
+
 ## Pass criteria
 
 All scenarios except #3, #16, and #17 must PASS before tagging a release.
