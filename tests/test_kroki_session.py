@@ -1250,3 +1250,74 @@ class TestLock:
         assert loaded["source_path"] == "/fresh.puml"
         # Corrupt file preserved for forensics.
         assert list(tmp_path.glob(".active-editor.lock.corrupt.*"))
+
+    def test_check_no_lock(self, tmp_path, monkeypatch):
+        """U12 — no lock file → ok / not blocked."""
+        from lib.kroki_session import lock
+
+        monkeypatch.setattr(lock, "LOCK_PATH", tmp_path / ".active-editor.lock")
+        result = lock.check_editor_lock("/any/source.puml")
+        assert result.locked is False
+        assert result.blocks_target is False
+        assert result.reason == "ok"
+        assert result.source_path is None
+
+    def test_check_blank_session_allows_any(self, tmp_path, monkeypatch):
+        """U13 — source_path: null lock doesn't block any render target."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        lock_path.write_text(json.dumps({
+            "source_path": None,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }))
+
+        result = lock.check_editor_lock("/any/source.puml")
+        assert result.locked is True
+        assert result.blocks_target is False
+        assert result.reason == "blank-session"
+        assert result.source_path is None
+
+    def test_check_source_match_blocks(self, tmp_path, monkeypatch):
+        """U14 — exact abspath match → blocked."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        target = str(tmp_path / "target.puml")
+        (tmp_path / "target.puml").touch()
+        lock_path.write_text(json.dumps({
+            "source_path": target,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }))
+
+        result = lock.check_editor_lock(target)
+        assert result.locked is True
+        assert result.blocks_target is True
+        assert result.reason == "locked-on-target"
+        assert result.source_path == target
+
+    def test_check_source_differs_allows(self, tmp_path, monkeypatch):
+        """U15 — different source → locked but not blocking."""
+        from lib.kroki_session import lock
+        from datetime import datetime, timezone
+
+        lock_path = tmp_path / ".active-editor.lock"
+        monkeypatch.setattr(lock, "LOCK_PATH", lock_path)
+        locked_file = str(tmp_path / "locked.puml")
+        other_file = str(tmp_path / "other.puml")
+        for f in (locked_file, other_file):
+            open(f, "w").close()
+        lock_path.write_text(json.dumps({
+            "source_path": locked_file,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }))
+
+        result = lock.check_editor_lock(other_file)
+        assert result.locked is True
+        assert result.blocks_target is False
+        assert result.reason == "locked-other-file"
+        assert result.source_path == locked_file

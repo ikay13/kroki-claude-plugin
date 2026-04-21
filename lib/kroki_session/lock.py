@@ -166,4 +166,25 @@ def is_stale(lock_dict: dict) -> bool:
 
 
 def check_editor_lock(source_path: str) -> LockCheckResult:
-    raise NotImplementedError
+    lock_dict = read_lock()
+    if lock_dict is None:
+        return LockCheckResult(locked=False, blocks_target=False, source_path=None, reason="ok")
+
+    locked_source = lock_dict.get("source_path")
+    if locked_source is None:
+        return LockCheckResult(locked=True, blocks_target=False, source_path=None, reason="blank-session")
+
+    if os.path.abspath(source_path) == os.path.abspath(locked_source):
+        return LockCheckResult(
+            locked=True,
+            blocks_target=True,
+            source_path=locked_source,
+            reason="locked-on-target",
+        )
+
+    return LockCheckResult(
+        locked=True,
+        blocks_target=False,
+        source_path=locked_source,
+        reason="locked-other-file",
+    )
