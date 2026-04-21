@@ -421,3 +421,51 @@ class TestWatchdogSubcommands:
         monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
         from lib.kroki_container import watchdog
         assert watchdog.cmd_snooze("never") != 0
+
+
+class TestDigestHelpers:
+    def test_discover_pod_images_parses_inspect_output(self):
+        from lib.kroki_container import version_check
+        fake_inspect = json.dumps([{
+            "Containers": [
+                {"Image": "docker.io/yuzutech/kroki:latest"},
+                {"Image": "docker.io/yuzutech/kroki-mermaid:latest"},
+                {"Image": "localhost/kroki-gateway-patched:latest"},
+            ]
+        }])
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=fake_inspect)
+            images = version_check.discover_pod_images("kroki")
+        assert "docker.io/yuzutech/kroki:latest" in images
+        assert "docker.io/yuzutech/kroki-mermaid:latest" in images
+        assert "localhost/kroki-gateway-patched:latest" in images
+
+    def test_inspect_local_digest_extracts_sha256(self):
+        from lib.kroki_container import version_check
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="sha256:abc123def456\n",
+            )
+            assert version_check.inspect_local_digest("img:tag") == "sha256:abc123def456"
+
+    def test_inspect_local_digest_missing_returns_none(self):
+        from lib.kroki_container import version_check
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+            assert version_check.inspect_local_digest("img:tag") is None
+
+    def test_compute_digest_set_hash_stable(self):
+        from lib.kroki_container import version_check
+        a = version_check.compute_digest_set_hash({"img1": "sha256:aaa", "img2": "sha256:bbb"})
+        b = version_check.compute_digest_set_hash({"img2": "sha256:bbb", "img1": "sha256:aaa"})
+        assert a == b  # order-independent
+        c = version_check.compute_digest_set_hash({"img1": "sha256:aaa", "img2": "sha256:ccc"})
+        assert a != c  # digest-sensitive
+
+    def test_compute_changed_images(self):
+        from lib.kroki_container import version_check
+        baseline = {"a": "sha256:1", "b": "sha256:2"}
+        current = {"a": "sha256:1", "b": "sha256:X"}
+        changed = version_check.compute_changed_images(baseline, current)
+        assert changed == {"b": ("sha256:2", "sha256:X")}
