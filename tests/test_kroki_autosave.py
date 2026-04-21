@@ -560,3 +560,48 @@ class TestStatusCLI:
         # Exits 0 even with no daemon; reports "inactive" or similar
         assert result.returncode == 0
         assert "kroki-autosave.service" in result.stdout
+
+
+class TestPidfileLock:
+    def test_acquire_creates_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_autosave import daemon
+        lock = daemon.PidFileLock(tmp_path / "autosaves" / ".autosave-daemon.pid")
+        lock.acquire()
+        assert lock.path.exists()
+        assert int(lock.path.read_text().strip()) == os.getpid()
+        lock.release()
+
+    def test_release_removes_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_autosave import daemon
+        lock = daemon.PidFileLock(tmp_path / "autosaves" / ".autosave-daemon.pid")
+        lock.acquire()
+        lock.release()
+        assert not lock.path.exists()
+
+    def test_double_acquire_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_autosave import daemon
+        (tmp_path / "autosaves").mkdir(parents=True)
+        lockA = daemon.PidFileLock(tmp_path / "autosaves" / ".autosave-daemon.pid")
+        lockB = daemon.PidFileLock(tmp_path / "autosaves" / ".autosave-daemon.pid")
+        lockA.acquire()
+        try:
+            with pytest.raises(daemon.DaemonAlreadyRunningError):
+                lockB.acquire()
+        finally:
+            lockA.release()
+
+    def test_dead_process_reclaim(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KROKI_STATE_DIR", str(tmp_path))
+        from lib.kroki_autosave import daemon
+        (tmp_path / "autosaves").mkdir(parents=True)
+        pidfile = tmp_path / "autosaves" / ".autosave-daemon.pid"
+        # Simulate stale: write a PID that doesn't exist
+        # (PID 99999999 is almost certainly not running)
+        pidfile.write_text("99999999")
+        lock = daemon.PidFileLock(pidfile)
+        lock.acquire()  # should reclaim
+        assert int(pidfile.read_text().strip()) == os.getpid()
+        lock.release()
