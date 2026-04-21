@@ -617,3 +617,87 @@ class TestVersionCheckSubcommands:
         version_check.cmd_status()
         out = capsys.readouterr().out
         assert "baseline" in out.lower() or "deferred" in out.lower()
+
+
+class TestComputeNewFailures:
+    def test_empty_baseline_returns_empty(self):
+        from lib.kroki_container import upgrade
+        assert upgrade.compute_new_failures({}, {"a": "fail"}) == []
+
+    def test_pass_to_fail_is_regression(self):
+        from lib.kroki_container import upgrade
+        assert upgrade.compute_new_failures(
+            {"a": "pass", "b": "pass"},
+            {"a": "pass", "b": "fail"}
+        ) == ["b"]
+
+    def test_fail_to_fail_is_pre_existing(self):
+        from lib.kroki_container import upgrade
+        assert upgrade.compute_new_failures(
+            {"a": "fail"},
+            {"a": "fail"}
+        ) == []
+
+    def test_missing_post_entry_counts_as_fail(self):
+        from lib.kroki_container import upgrade
+        assert upgrade.compute_new_failures(
+            {"a": "pass", "b": "pass"},
+            {"a": "pass"}  # b missing
+        ) == ["b"]
+
+    def test_multiple_regressions_sorted(self):
+        from lib.kroki_container import upgrade
+        assert upgrade.compute_new_failures(
+            {"z": "pass", "a": "pass", "m": "pass"},
+            {"z": "fail", "a": "fail", "m": "pass"}
+        ) == ["a", "z"]
+
+
+class TestShouldRollback:
+    def test_pod_health_failure_triggers_A(self):
+        from lib.kroki_container import upgrade
+        rb, reason = upgrade.should_rollback("A_pod_health", {"healthy": False})
+        assert rb is True
+        assert "pod" in reason.lower()
+
+    def test_smoke_regression_triggers_B(self):
+        from lib.kroki_container import upgrade
+        rb, reason = upgrade.should_rollback(
+            "B_smoke", {"new_failures": ["tikz", "c4plantuml"]}
+        )
+        assert rb is True
+        assert "tikz" in reason
+
+    def test_smoke_no_regression_no_rollback(self):
+        from lib.kroki_container import upgrade
+        rb, _ = upgrade.should_rollback("B_smoke", {"new_failures": []})
+        assert rb is False
+
+    def test_pytest_failure_triggers_C(self):
+        from lib.kroki_container import upgrade
+        rb, reason = upgrade.should_rollback("C_pytest", {"failed_count": 3})
+        assert rb is True
+        assert "pytest" in reason.lower()
+
+
+class TestIsUpstream:
+    def test_localhost_prefix_is_local(self):
+        from lib.kroki_container import upgrade
+        # is_upstream calls podman inspect; patch subprocess
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
+            assert upgrade.is_upstream("localhost/kroki-gateway-patched:latest") is False
+
+    def test_registry_image_with_digest_is_upstream(self):
+        from lib.kroki_container import upgrade
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="sha256:abc123\n", stderr=""
+            )
+            assert upgrade.is_upstream("docker.io/yuzutech/kroki:latest") is True
+
+    def test_bare_image_without_digest_is_local(self):
+        from lib.kroki_container import upgrade
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            assert upgrade.is_upstream("my-custom-image:tag") is False
